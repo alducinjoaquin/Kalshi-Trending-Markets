@@ -136,7 +136,6 @@ def format_pct(value):
 @st.cache_data(ttl=60)
 def get_events():
 
-  
     events = []
     cursor = ""
 
@@ -294,8 +293,7 @@ if st.button("🔄 ACTUALIZAR DATOS", type="primary", use_container_width=True):
 # CONSULTA
 # ============================================================
 
-
-    with st.spinner("🔎 Consultando mercados de Kalshi..."):
+with st.spinner("🔎 Consultando mercados de Kalshi..."):
 
     try:
         events = get_events()
@@ -314,6 +312,7 @@ if st.button("🔄 ACTUALIZAR DATOS", type="primary", use_container_width=True):
         st.error("❌ Error procesando los datos.")
         st.code(str(error))
         st.stop()
+
 
 # ============================================================
 # RESULTADO VACÍO
