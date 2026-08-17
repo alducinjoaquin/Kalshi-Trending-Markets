@@ -161,29 +161,57 @@ def get_target_series_tickers():
 # ÍNDICES — descubrimiento por TÍTULO de serie
 # ============================================================
 
+# ============================================================
+# ÍNDICES — descubrimiento por TÍTULO de serie
+# ============================================================
+
 INDICE_KEYWORDS = {
-    "NASDAQ-100": ["nasdaq-100", "nasdaq 100"],
-    "S&P 500": ["s&p 500", "s&p500"],
-    "Dow Jones": ["dow jones"],
+    "NASDAQ-100": [
+        "nasdaq-100", "nasdaq 100", "nasdaq100", "nasdaq", "ndx"
+    ],
+    "S&P 500": [
+        "s&p 500", "s&p500", "s&p", "spx", "inx", "s and p"
+    ],
+    "Dow Jones": [
+        "dow jones", "dow jones industrial", "djia", "dji", "dow"
+    ],
 }
 
 
 def discover_index_series():
     """
-    Encuentra series de NASDAQ-100, S&P 500 y Dow Jones por título.
+    Recorre el catálogo de series y encuentra, por coincidencia de
+    texto en el título o ticker, todas las series relacionadas a
+    NASDAQ-100, S&P 500 y Dow Jones.
+    Solo considera categorías Financials/Economics para evitar ruido.
     Devuelve {ticker: (nombre_indice, titulo_serie)}.
     """
     found = {}
+    allowed_cats = {"financials", "economics", "finance", "economy"}
+
     for series in get_all_series():
         ticker = series.get("ticker", "")
         title = str(series.get("title", ""))
         title_lower = title.lower()
+        ticker_lower = ticker.lower()
+        category = str(series.get("category", "")).strip().lower()
+
+        # Filtrar por categoría para reducir falsos positivos
+        if category and category not in allowed_cats:
+            continue
 
         for indice_nombre, keywords in INDICE_KEYWORDS.items():
-            if any(kw in title_lower for kw in keywords):
+            if any(kw in title_lower or kw in ticker_lower for kw in keywords):
                 found[ticker] = (indice_nombre, title)
                 break
+
     return found
+
+
+
+
+
+
 
 
 # ============================================================
