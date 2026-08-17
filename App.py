@@ -20,16 +20,15 @@ MAX_HOURS = 25
 TOP_N = 10
 
 # Series de "ganador del partido" (moneyline) por liga.
-# Confirmado contra la documentación pública de Kalshi.
+# Todas se etiquetan como "Deportes" para que aparezcan en la sección correcta.
 SPORTS_SERIES = {
-    "KXNFLGAME": "NFL",
-    "KXNCAAFGAME": "NCAAF",
-    "KXMLBGAME": "MLB",
-    "KXNBAGAME": "NBA",
+    "KXNFLGAME": "Deportes",
+    "KXNCAAFGAME": "Deportes",
+    "KXMLBGAME": "Deportes",
+    "KXNBAGAME": "Deportes",
 }
 
-# Categorías (a nivel de serie, que es la fuente de verdad actual;
-# el campo "category" a nivel de evento está deprecado en la API).
+# Categorías (a nivel de serie)
 ECONOMIA_CATEGORIAS = {"economics", "economy"}
 
 
@@ -100,10 +99,8 @@ st.markdown(
 
 def get_number(value):
     """Convierte valores de Kalshi (strings de punto fijo) a float."""
-
     if value is None:
         return 0.0
-
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -112,25 +109,19 @@ def get_number(value):
 
 def parse_time(value):
     """Convierte timestamp ISO de Kalshi a datetime UTC."""
-
     if not value:
         return None
-
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-
         return dt
-
     except (TypeError, ValueError):
         return None
 
 
 def format_pct(value):
     """Convierte un precio en dólares (0.0-1.0) a texto de porcentaje."""
-
     return f"{value * 100:.2f}%"
 
 
@@ -140,11 +131,9 @@ def format_pct(value):
 
 @st.cache_data(ttl=300)
 def get_all_series():
-    """Trae el catálogo completo de series (son cientos, no miles)."""
-
+    """Trae el catálogo completo de series."""
     response = requests.get(f"{BASE_URL}/series", timeout=30)
     response.raise_for_status()
-
     return response.json().get("series", [])
 
 
@@ -152,14 +141,10 @@ def get_target_series_tickers():
     """
     Devuelve un dict {series_ticker: categoria_final} solo para las
     series que nos interesan: Economía y las 4 ligas de Deportes.
-    (Finanzas/Índices se maneja aparte, ver discover_index_series).
-    Evita tener que escanear todos los eventos abiertos.
     """
-
-    targets = dict(SPORTS_SERIES)  # arranca con las 4 ligas
+    targets = dict(SPORTS_SERIES)  # arranca con las 4 ligas como "Deportes"
 
     for series in get_all_series():
-
         ticker = series.get("ticker", "")
         category = str(series.get("category", "")).strip().lower()
 
@@ -173,9 +158,7 @@ def get_target_series_tickers():
 
 
 # ============================================================
-# ÍNDICES — descubrimiento por TÍTULO de serie, no por ticker
-# adivinado. Evita repetir el error de hardcodear tickers que
-# resultaron incorrectos (ej. Dow Jones Up/Down no existe).
+# ÍNDICES — descubrimiento por TÍTULO de serie
 # ============================================================
 
 INDICE_KEYWORDS = {
@@ -187,16 +170,11 @@ INDICE_KEYWORDS = {
 
 def discover_index_series():
     """
-    Recorre el catálogo de series y encuentra, por coincidencia de
-    texto en el título, todas las series relacionadas a NASDAQ-100,
-    S&P 500 y Dow Jones (Up/Down, rango de precio, o lo que exista).
+    Encuentra series de NASDAQ-100, S&P 500 y Dow Jones por título.
     Devuelve {ticker: (nombre_indice, titulo_serie)}.
     """
-
     found = {}
-
     for series in get_all_series():
-
         ticker = series.get("ticker", "")
         title = str(series.get("title", ""))
         title_lower = title.lower()
@@ -205,7 +183,6 @@ def discover_index_series():
             if any(kw in title_lower for kw in keywords):
                 found[ticker] = (indice_nombre, title)
                 break
-
     return found
 
 
@@ -213,43 +190,40 @@ def discover_index_series():
 # PASO 2 — TRAER EVENTOS SOLO DE ESAS SERIES ESPECÍFICAS
 # ============================================================
 
-def _fetch_one_series(session, series_ticker):
-    """Trae eventos abiertos de UNA serie puntual (paginado por si acaso).
-    Nunca lanza excepción hacia afuera. Devuelve None si la petición
-    falló (para poder distinguirlo de "la serie no tiene eventos"),
-    o la lista de eventos (posiblemente vacía) si sí respondió."""
-
+def _fetch_one_series(series_ticker):
+    """
+    Trae eventos abiertos de UNA serie puntual.
+    Cada llamada crea su propia Session (thread-safe).
+    Devuelve None si falló, o la lista de eventos si respondió.
+    """
     events = []
     cursor = ""
 
     try:
-        for _ in range(10):
+        with requests.Session() as session:
+            for _ in range(10):
+                params = {
+                    "series_ticker": series_ticker,
+                    "status": "open",
+                    "with_nested_markets": "true",
+                    "limit": 200,
+                }
+                if cursor:
+                    params["cursor"] = cursor
 
-            params = {
-                "series_ticker": series_ticker,
-                "status": "open",
-                "with_nested_markets": "true",
-                "limit": 200,
-            }
+                response = session.get(f"{BASE_URL}/events", params=params, timeout=8)
+                response.raise_for_status()
 
-            if cursor:
-                params["cursor"] = cursor
+                data = response.json()
+                batch = data.get("events", [])
 
-            response = session.get(f"{BASE_URL}/events", params=params, timeout=8)
-            response.raise_for_status()
+                if not batch:
+                    break
 
-            data = response.json()
-            batch = data.get("events", [])
-
-            if not batch:
-                break
-
-            events.extend(batch)
-
-            cursor = data.get("cursor", "")
-
-            if not cursor:
-                break
+                events.extend(batch)
+                cursor = data.get("cursor", "")
+                if not cursor:
+                    break
 
     except requests.exceptions.RequestException:
         return None
@@ -260,39 +234,31 @@ def _fetch_one_series(session, series_ticker):
 @st.cache_data(ttl=60)
 def get_events_for_all_targets(series_tickers, overall_timeout_seconds=45):
     """
-    Trae eventos de VARIAS series en paralelo (no una por una), con un
-    tope de tiempo total. Si algunas series no alcanzan a responder
-    dentro del tope, se cuentan como fallidas (no se confunden con
-    "la serie no tiene eventos") y se muestran aparte.
+    Trae eventos de VARIAS series en paralelo con tope de tiempo total.
     Devuelve (resultados, num_fallidas, num_total).
     """
-
     raw_results = {}
 
-    with requests.Session() as session:
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {
+            executor.submit(_fetch_one_series, ticker): ticker
+            for ticker in series_tickers
+        }
 
-        with ThreadPoolExecutor(max_workers=15) as executor:
+        try:
+            for future in as_completed(futures, timeout=overall_timeout_seconds):
+                ticker = futures[future]
+                try:
+                    raw_results[ticker] = future.result()
+                except Exception:
+                    raw_results[ticker] = None
 
-            futures = {
-                executor.submit(_fetch_one_series, session, ticker): ticker
-                for ticker in series_tickers
-            }
-
-            try:
-                for future in as_completed(futures, timeout=overall_timeout_seconds):
-                    ticker = futures[future]
-                    try:
-                        raw_results[ticker] = future.result()
-                    except Exception:
-                        raw_results[ticker] = None
-
-            except FuturesTimeoutError:
-                # Se acabó el tiempo global: lo que no terminó, se
-                # marca como fallido en vez de bloquear la app.
-                for future, ticker in futures.items():
-                    if ticker not in raw_results:
-                        raw_results[ticker] = None
-                        future.cancel()
+        except FuturesTimeoutError:
+            # Se acabó el tiempo global
+            for future, ticker in futures.items():
+                if ticker not in raw_results:
+                    raw_results[ticker] = None
+                    future.cancel()
 
     num_fallidas = sum(1 for v in raw_results.values() if v is None)
     num_total = len(raw_results)
@@ -305,13 +271,11 @@ def get_events_for_all_targets(series_tickers, overall_timeout_seconds=45):
     return resultados, num_fallidas, num_total
 
 
-
 # ============================================================
 # PROCESAR EVENTOS → FILAS DE TABLA
 # ============================================================
 
 def build_dataframe(targets):
-
     now = datetime.now(timezone.utc)
     max_close = now + timedelta(hours=MAX_HOURS)
 
@@ -321,12 +285,10 @@ def build_dataframe(targets):
     events_by_series, num_fallidas, num_total = get_events_for_all_targets(tuple(targets.keys()))
 
     for series_ticker, category_final in targets.items():
-
         events = events_by_series.get(series_ticker, [])
         total_events_fetched += len(events)
 
         for event in events:
-
             event_title = (
                 event.get("title")
                 or event.get("sub_title")
@@ -337,17 +299,13 @@ def build_dataframe(targets):
             markets = event.get("markets", [])
 
             for market in markets:
-
                 status = str(market.get("status", "")).lower()
-
                 if status != "active":
                     continue
 
                 close_dt = parse_time(market.get("close_time"))
-
                 if close_dt is None:
                     continue
-
                 if close_dt <= now or close_dt > max_close:
                     continue
 
@@ -357,7 +315,6 @@ def build_dataframe(targets):
                     or market.get("subtitle")
                     or event_title
                 )
-
                 market_title = str(market_title).strip() or event_title
 
                 yes_bid = get_number(market.get("yes_bid_dollars"))
@@ -390,26 +347,24 @@ def build_dataframe(targets):
 def build_indices_dataframe():
     """
     Trae eventos de las series de NASDAQ-100 / S&P 500 / Dow Jones
-    (descubiertas por título) y arma dos grupos: los que cierran
-    hoy y los que cierran mañana (fecha UTC).
+    y arma dos grupos: los que cierran hoy y los que cierran mañana (UTC).
     """
-
     index_series = discover_index_series()
 
     now = datetime.now(timezone.utc)
     hoy = now.date()
     manana = hoy + timedelta(days=1)
 
-    events_by_series, indices_num_fallidas, indices_num_total = get_events_for_all_targets(tuple(index_series.keys()))
+    events_by_series, indices_num_fallidas, indices_num_total = get_events_for_all_targets(
+        tuple(index_series.keys())
+    )
 
     rows = []
 
     for series_ticker, (indice_nombre, series_title) in index_series.items():
-
         events = events_by_series.get(series_ticker, [])
 
         for event in events:
-
             event_title = (
                 event.get("title")
                 or event.get("sub_title")
@@ -419,19 +374,15 @@ def build_indices_dataframe():
             markets = event.get("markets", [])
 
             for market in markets:
-
                 status = str(market.get("status", "")).lower()
-
                 if status != "active":
                     continue
 
                 close_dt = parse_time(market.get("close_time"))
-
                 if close_dt is None:
                     continue
 
                 close_date = close_dt.date()
-
                 if close_date == hoy:
                     grupo = "Hoy"
                 elif close_date == manana:
@@ -445,7 +396,6 @@ def build_indices_dataframe():
                     or market.get("subtitle")
                     or event_title
                 )
-
                 market_title = str(market_title).strip() or event_title
 
                 rows.append({
@@ -483,7 +433,6 @@ if st.button("🔄 ACTUALIZAR DATOS", type="primary", use_container_width=True):
 # ============================================================
 
 with st.spinner("🔎 Consultando mercados de Kalshi..."):
-
     try:
         targets = get_target_series_tickers()
         st.caption(f"Consultando {len(targets)} series en paralelo (máx. 45s)...")
@@ -506,7 +455,6 @@ with st.spinner("🔎 Consultando mercados de Kalshi..."):
 # ============================================================
 
 if df.empty and indices_df.empty:
-
     st.warning(
         "No encontramos mercados de Economía, Índices o Deportes "
         f"(ganador del partido: NFL, NCAAF, MLB, NBA) que venzan en "
@@ -531,7 +479,6 @@ if df.empty and indices_df.empty:
         f"Series consultadas (Economía/Deportes): {len(targets)} · "
         f"Eventos revisados en esas series: {total_events_fetched:,}"
     )
-
     st.stop()
 
 
@@ -540,7 +487,6 @@ if df.empty and indices_df.empty:
 # ============================================================
 
 def show_category(dataframe, category, icon):
-
     data = dataframe[dataframe["Categoría"] == category].copy()
 
     st.markdown(
@@ -559,12 +505,7 @@ def show_category(dataframe, category, icon):
         st.info("No hay mercados disponibles en esta categoría.")
         return
 
-    # --------------------------------------------------------
-    # AGRUPAR POR EVENTO: un evento (ej. "EUR/USD range 2pm")
-    # puede tener 10-30 resultados/rangos posibles como mercados
-    # individuales. Queremos UNA fila por evento, no una por rango.
-    # --------------------------------------------------------
-
+    # Agrupar por evento
     event_rank = (
         data.groupby("EventTicker")
         .agg(
@@ -582,12 +523,9 @@ def show_category(dataframe, category, icon):
     rows_out = []
 
     for _, event_row in event_rank.iterrows():
-
         event_ticker = event_row["EventTicker"]
         subset = data[data["EventTicker"] == event_ticker]
 
-        # El resultado representativo del evento es el que tiene
-        # más interés abierto (el más "cotizado" de ese evento).
         representative = subset.sort_values(
             ["Interés Abierto", "Volumen"],
             ascending=[False, False]
@@ -596,9 +534,6 @@ def show_category(dataframe, category, icon):
         event_title = representative["EventTitle"]
         resultado = representative["Resultado"]
 
-        # Evita repetir el mismo texto dos veces cuando el
-        # resultado individual ya es igual al título del evento
-        # (mercados binarios simples, sin rangos).
         if resultado.strip() and resultado.strip() != event_title.strip():
             nombre_mostrado = f"{event_title} — {resultado}"
         else:
@@ -625,7 +560,6 @@ def show_category(dataframe, category, icon):
     table["Vencimiento"] = table["Vencimiento"].apply(
         lambda x: x.strftime("%d %b · %H:%M")
     )
-
     table["YES Bid"] = table["YES Bid"].apply(format_pct)
     table["NO Bid"] = table["NO Bid"].apply(format_pct)
 
@@ -648,18 +582,13 @@ def show_category(dataframe, category, icon):
             ),
         }
     )
-
     st.markdown("---")
 
 
 def show_indices_group(indices_dataframe, grupo, titulo, icon):
     """
     Muestra un grupo (Hoy / Mañana) de mercados de índices.
-    Un evento = una fila (mismo criterio de agrupación que
-    show_category), pero sin ranking por interés abierto: se
-    muestran todos los eventos del grupo, ordenados por índice.
     """
-
     data = indices_dataframe[indices_dataframe["Grupo"] == grupo].copy()
 
     st.markdown(
@@ -678,7 +607,6 @@ def show_indices_group(indices_dataframe, grupo, titulo, icon):
     rows_out = []
 
     for event_ticker in data["EventTicker"].unique():
-
         subset = data[data["EventTicker"] == event_ticker]
 
         representative = subset.sort_values(
@@ -712,7 +640,6 @@ def show_indices_group(indices_dataframe, grupo, titulo, icon):
     table["Vencimiento"] = table["Vencimiento"].apply(
         lambda x: x.strftime("%d %b · %H:%M")
     )
-
     table["YES Bid"] = table["YES Bid"].apply(format_pct)
     table["NO Bid"] = table["NO Bid"].apply(format_pct)
 
@@ -736,7 +663,6 @@ def show_indices_group(indices_dataframe, grupo, titulo, icon):
             ),
         }
     )
-
     st.markdown("---")
 
 
