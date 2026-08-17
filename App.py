@@ -295,7 +295,7 @@ def build_dataframe(targets):
 
                 status = str(market.get("status", "")).lower()
 
-                if status != "open":
+                if status != "active":
                     continue
 
                 close_dt = parse_time(market.get("close_time"))
