@@ -30,7 +30,6 @@ SPORTS_SERIES = {
 
 # Categorías (a nivel de serie, que es la fuente de verdad actual;
 # el campo "category" a nivel de evento está deprecado en la API).
-FINANZAS_CATEGORIAS = {"financials", "finance", "financial"}
 ECONOMIA_CATEGORIAS = {"economics", "economy"}
 
 
@@ -152,8 +151,9 @@ def get_all_series():
 def get_target_series_tickers():
     """
     Devuelve un dict {series_ticker: categoria_final} solo para las
-    series que nos interesan: Finanzas, Economía y las 4 ligas de
-    Deportes. Evita tener que escanear todos los eventos abiertos.
+    series que nos interesan: Economía y las 4 ligas de Deportes.
+    (Finanzas/Índices se maneja aparte, ver discover_index_series).
+    Evita tener que escanear todos los eventos abiertos.
     """
 
     targets = dict(SPORTS_SERIES)  # arranca con las 4 ligas
@@ -166,13 +166,47 @@ def get_target_series_tickers():
         if ticker in targets:
             continue  # ya está cubierto como serie deportiva
 
-        if category in FINANZAS_CATEGORIAS:
-            targets[ticker] = "Finanzas"
-
-        elif category in ECONOMIA_CATEGORIAS:
+        if category in ECONOMIA_CATEGORIAS:
             targets[ticker] = "Economía"
 
     return targets
+
+
+# ============================================================
+# ÍNDICES — descubrimiento por TÍTULO de serie, no por ticker
+# adivinado. Evita repetir el error de hardcodear tickers que
+# resultaron incorrectos (ej. Dow Jones Up/Down no existe).
+# ============================================================
+
+INDICE_KEYWORDS = {
+    "NASDAQ-100": ["nasdaq-100", "nasdaq 100"],
+    "S&P 500": ["s&p 500", "s&p500"],
+    "Dow Jones": ["dow jones"],
+}
+
+
+def discover_index_series():
+    """
+    Recorre el catálogo de series y encuentra, por coincidencia de
+    texto en el título, todas las series relacionadas a NASDAQ-100,
+    S&P 500 y Dow Jones (Up/Down, rango de precio, o lo que exista).
+    Devuelve {ticker: (nombre_indice, titulo_serie)}.
+    """
+
+    found = {}
+
+    for series in get_all_series():
+
+        ticker = series.get("ticker", "")
+        title = str(series.get("title", ""))
+        title_lower = title.lower()
+
+        for indice_nombre, keywords in INDICE_KEYWORDS.items():
+            if any(kw in title_lower for kw in keywords):
+                found[ticker] = (indice_nombre, title)
+                break
+
+    return found
 
 
 # ============================================================
@@ -336,6 +370,83 @@ def build_dataframe(targets):
     return pd.DataFrame(rows), total_events_fetched
 
 
+def build_indices_dataframe():
+    """
+    Trae eventos de las series de NASDAQ-100 / S&P 500 / Dow Jones
+    (descubiertas por título) y arma dos grupos: los que cierran
+    hoy y los que cierran mañana (fecha UTC).
+    """
+
+    index_series = discover_index_series()
+
+    now = datetime.now(timezone.utc)
+    hoy = now.date()
+    manana = hoy + timedelta(days=1)
+
+    events_by_series = get_events_for_all_targets(tuple(index_series.keys()))
+
+    rows = []
+
+    for series_ticker, (indice_nombre, series_title) in index_series.items():
+
+        events = events_by_series.get(series_ticker, [])
+
+        for event in events:
+
+            event_title = (
+                event.get("title")
+                or event.get("sub_title")
+                or series_title
+            )
+
+            markets = event.get("markets", [])
+
+            for market in markets:
+
+                status = str(market.get("status", "")).lower()
+
+                if status != "active":
+                    continue
+
+                close_dt = parse_time(market.get("close_time"))
+
+                if close_dt is None:
+                    continue
+
+                close_date = close_dt.date()
+
+                if close_date == hoy:
+                    grupo = "Hoy"
+                elif close_date == manana:
+                    grupo = "Mañana"
+                else:
+                    continue
+
+                market_title = (
+                    market.get("yes_sub_title")
+                    or market.get("title")
+                    or market.get("subtitle")
+                    or event_title
+                )
+
+                market_title = str(market_title).strip() or event_title
+
+                rows.append({
+                    "Grupo": grupo,
+                    "Índice": indice_nombre,
+                    "EventTicker": event.get("event_ticker", ""),
+                    "EventTitle": str(event_title).strip(),
+                    "Resultado": market_title,
+                    "Vencimiento": close_dt,
+                    "YES Bid": get_number(market.get("yes_bid_dollars")),
+                    "NO Bid": get_number(market.get("no_bid_dollars")),
+                    "Volumen": get_number(market.get("volume_24h_fp")),
+                    "Interés Abierto": get_number(market.get("open_interest_fp")),
+                })
+
+    return pd.DataFrame(rows)
+
+
 # ============================================================
 # BOTÓN ACTUALIZAR
 # ============================================================
@@ -355,6 +466,7 @@ with st.spinner("🔎 Consultando mercados de Kalshi..."):
         targets = get_target_series_tickers()
         st.caption(f"Consultando {len(targets)} series en paralelo (máx. 45s)...")
         df, total_events_fetched = build_dataframe(targets)
+        indices_df = build_indices_dataframe()
 
     except requests.exceptions.RequestException as error:
         st.error("❌ Error de conexión con Kalshi.")
@@ -371,16 +483,16 @@ with st.spinner("🔎 Consultando mercados de Kalshi..."):
 # RESULTADO VACÍO
 # ============================================================
 
-if df.empty:
+if df.empty and indices_df.empty:
 
     st.warning(
-        "No encontramos mercados de Economía, Finanzas o Deportes "
+        "No encontramos mercados de Economía, Índices o Deportes "
         f"(ganador del partido: NFL, NCAAF, MLB, NBA) que venzan en "
-        f"menos de {MAX_HOURS} horas."
+        f"menos de {MAX_HOURS} horas (o, para Índices, hoy/mañana)."
     )
 
     st.info(
-        f"Series consultadas: {len(targets)} · "
+        f"Series consultadas (Economía/Deportes): {len(targets)} · "
         f"Eventos revisados en esas series: {total_events_fetched:,}"
     )
 
@@ -504,12 +616,101 @@ def show_category(dataframe, category, icon):
     st.markdown("---")
 
 
+def show_indices_group(indices_dataframe, grupo, titulo, icon):
+    """
+    Muestra un grupo (Hoy / Mañana) de mercados de índices.
+    Un evento = una fila (mismo criterio de agrupación que
+    show_category), pero sin ranking por interés abierto: se
+    muestran todos los eventos del grupo, ordenados por índice.
+    """
+
+    data = indices_dataframe[indices_dataframe["Grupo"] == grupo].copy()
+
+    st.markdown(
+        f'<div class="section">{icon} {titulo}</div>',
+        unsafe_allow_html=True
+    )
+
+    if data.empty:
+        st.markdown(
+            '<div class="section-note">Sin mercados en este grupo</div>',
+            unsafe_allow_html=True
+        )
+        st.info("No hay mercados de índices disponibles en este grupo.")
+        return
+
+    rows_out = []
+
+    for event_ticker in data["EventTicker"].unique():
+
+        subset = data[data["EventTicker"] == event_ticker]
+
+        representative = subset.sort_values(
+            ["Interés Abierto", "Volumen"],
+            ascending=[False, False]
+        ).iloc[0]
+
+        event_title = representative["EventTitle"]
+        resultado = representative["Resultado"]
+
+        if resultado.strip() and resultado.strip() != event_title.strip():
+            nombre_mostrado = f"{event_title} — {resultado}"
+        else:
+            nombre_mostrado = event_title
+
+        rows_out.append({
+            "Índice": representative["Índice"],
+            "Mercado / Evento": nombre_mostrado,
+            "Vencimiento": representative["Vencimiento"],
+            "YES Bid": representative["YES Bid"],
+            "NO Bid": representative["NO Bid"],
+        })
+
+    st.markdown(
+        f'<div class="section-note">{len(rows_out)} evento(s)</div>',
+        unsafe_allow_html=True
+    )
+
+    table = pd.DataFrame(rows_out).sort_values("Índice")
+
+    table["Vencimiento"] = table["Vencimiento"].apply(
+        lambda x: x.strftime("%d %b · %H:%M")
+    )
+
+    table["YES Bid"] = table["YES Bid"].apply(format_pct)
+    table["NO Bid"] = table["NO Bid"].apply(format_pct)
+
+    st.dataframe(
+        table,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Índice": st.column_config.TextColumn("Índice", width="small"),
+            "Mercado / Evento": st.column_config.TextColumn(
+                "Mercado / Evento", width="large"
+            ),
+            "Vencimiento": st.column_config.TextColumn(
+                "Vencimiento", width="medium"
+            ),
+            "YES Bid": st.column_config.TextColumn(
+                "YES Bid", width="small"
+            ),
+            "NO Bid": st.column_config.TextColumn(
+                "NO Bid", width="small"
+            ),
+        }
+    )
+
+    st.markdown("---")
+
+
 # ============================================================
-# LAS 3 TABLAS
+# LAS TABLAS
 # ============================================================
 
 show_category(df, "Economía", "📈")
-show_category(df, "Finanzas", "💰")
+show_indices_group(indices_df, "Hoy", "Índices — Cierre de Hoy", "💰")
+show_indices_group(indices_df, "Mañana", "Índices — Cierre de Mañana", "💰")
 show_category(df, "Deportes", "🏆")
 
 
