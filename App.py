@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 # ============================================================
 
 st.set_page_config(
-    page_title="Kalshi Trending Markets",
+    page_title="Kalshi Trending",
     page_icon="📊",
     layout="wide"
 )
@@ -20,29 +20,41 @@ TOP_N = 10
 
 
 # ============================================================
-# ESTILO VISUAL
+# ESTILO
 # ============================================================
 
 st.markdown("""
 <style>
 
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
 .main-title {
-    font-size: 32px;
-    font-weight: 700;
-    margin-bottom: 0;
+    font-size: 34px;
+    font-weight: 800;
+    margin-bottom: 0px;
 }
 
 .subtitle {
     color: #6b7280;
-    font-size: 14px;
+    font-size: 15px;
     margin-bottom: 20px;
 }
 
-.metric-card {
-    padding: 15px;
-    border-radius: 12px;
-    background-color: #f5f7fa;
-    text-align: center;
+.category-title {
+    font-size: 24px;
+    font-weight: 800;
+    margin-top: 25px;
+    margin-bottom: 8px;
+}
+
+.info-box {
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: #f3f4f6;
+    margin-bottom: 15px;
 }
 
 </style>
@@ -60,37 +72,37 @@ st.markdown(
 
 st.markdown(
     f'<div class="subtitle">'
-    f'Mercados que vencen en menos de {MAX_HOURS} horas · '
-    f'ordenados por volumen'
+    f'Top {TOP_N} mercados por categoría · '
+    f'Vencimiento en menos de {MAX_HOURS} horas'
     f'</div>',
     unsafe_allow_html=True
 )
 
 
 # ============================================================
-# FUNCIONES AUXILIARES
+# CONVERSIÓN NUMÉRICA
 # ============================================================
 
-def to_number(value, default=0.0):
+def to_number(value):
 
     if value is None:
-        return default
+        return None
 
     try:
 
         if isinstance(value, str):
-
             value = value.replace(",", "").strip()
-
-            if value == "":
-                return default
 
         return float(value)
 
     except Exception:
 
-        return default
+        return None
 
+
+# ============================================================
+# FECHA
+# ============================================================
 
 def parse_datetime(value):
 
@@ -112,7 +124,6 @@ def parse_datetime(value):
 # DESCARGAR MERCADOS
 # ============================================================
 
-@st.cache_data(ttl=60)
 def fetch_markets():
 
     markets = []
@@ -140,16 +151,16 @@ def fetch_markets():
 
             data = response.json()
 
-        except requests.exceptions.RequestException as error:
+        except requests.exceptions.RequestException as e:
 
             raise RuntimeError(
-                f"Error de conexión con Kalshi: {error}"
+                f"No se pudo conectar con Kalshi: {e}"
             )
 
-        except Exception as error:
+        except Exception as e:
 
             raise RuntimeError(
-                f"Error procesando la respuesta de Kalshi: {error}"
+                f"Error procesando la respuesta: {e}"
             )
 
         batch = data.get("markets", [])
@@ -168,6 +179,186 @@ def fetch_markets():
 
 
 # ============================================================
+# CLASIFICACIÓN
+# ============================================================
+
+def classify_market(market):
+
+    text = " ".join([
+        str(market.get("title", "")),
+        str(market.get("subtitle", "")),
+        str(market.get("ticker", "")),
+        str(market.get("event_ticker", ""))
+    ]).lower()
+
+    # --------------------------------------------------------
+    # DEPORTES
+    # --------------------------------------------------------
+
+    sports = [
+
+        "nfl",
+        "nba",
+        "wnba",
+        "nhl",
+        "mlb",
+
+        "soccer",
+        "football",
+        "baseball",
+        "basketball",
+        "hockey",
+
+        "tennis",
+        "golf",
+        "ufc",
+        "boxing",
+
+        "match",
+        "game",
+        "games",
+        "team",
+
+        "league",
+        "championship",
+
+        "doosan",
+        "hanwha",
+        "lotte",
+        "samsung lions",
+        "fukuoka hawks",
+        "yomiuri",
+        "rakuten",
+        "chunichi",
+        "orix",
+        "hanshin",
+
+        "barcelona",
+        "psg",
+        "juventus",
+        "milan",
+        "atletico",
+        "wrexham",
+
+        "ravens",
+        "lions",
+
+        "points scored",
+        "goals scored",
+
+        "player",
+        "players"
+    ]
+
+    # --------------------------------------------------------
+    # FINANZAS
+    # --------------------------------------------------------
+
+    finance = [
+
+        "bitcoin",
+        "btc",
+        "ethereum",
+        "eth",
+        "crypto",
+        "cryptocurrency",
+
+        "stock",
+        "stocks",
+        "share",
+        "shares",
+
+        "nasdaq",
+        "s&p",
+        "sp500",
+        "s&p 500",
+        "dow",
+
+        "earnings",
+        "revenue",
+
+        "gold",
+        "silver",
+        "copper",
+
+        "oil",
+        "crude",
+        "gas",
+
+        "market",
+        "markets",
+
+        "financial",
+        "finance",
+
+        "etf",
+
+        "treasury",
+        "bond",
+        "bonds",
+
+        "yield"
+    ]
+
+    # --------------------------------------------------------
+    # ECONOMÍA
+    # --------------------------------------------------------
+
+    economy = [
+
+        "fed",
+        "federal reserve",
+
+        "inflation",
+        "cpi",
+        "ppi",
+
+        "gdp",
+        "gross domestic product",
+
+        "jobs",
+        "job",
+        "employment",
+        "unemployment",
+
+        "interest rate",
+        "interest rates",
+
+        "rate cut",
+        "rate hike",
+
+        "recession",
+
+        "economy",
+        "economic",
+
+        "tariff",
+        "tariffs",
+
+        "consumer price",
+
+        "nonfarm payroll",
+
+        "fomc"
+    ]
+
+    # --------------------------------------------------------
+    # PRIORIDAD
+    # --------------------------------------------------------
+
+    if any(word in text for word in sports):
+        return "Deportes"
+
+    if any(word in text for word in finance):
+        return "Finanzas"
+
+    if any(word in text for word in economy):
+        return "Economía"
+
+    return None
+
+
+# ============================================================
 # PROCESAR MERCADOS
 # ============================================================
 
@@ -178,10 +369,6 @@ def process_markets(markets):
     rows = []
 
     for market in markets:
-
-        # ----------------------------------------------------
-        # STATUS
-        # ----------------------------------------------------
 
         status = str(
             market.get("status", "")
@@ -194,7 +381,7 @@ def process_markets(markets):
             continue
 
         # ----------------------------------------------------
-        # FECHA DE CIERRE
+        # VENCIMIENTO
         # ----------------------------------------------------
 
         close_time = (
@@ -203,16 +390,10 @@ def process_markets(markets):
             or market.get("expected_expiration_time")
         )
 
-        close_dt = parse_datetime(
-            close_time
-        )
+        close_dt = parse_datetime(close_time)
 
         if close_dt is None:
             continue
-
-        # ----------------------------------------------------
-        # HORAS RESTANTES
-        # ----------------------------------------------------
 
         hours_left = (
             close_dt - now
@@ -225,7 +406,16 @@ def process_markets(markets):
             continue
 
         # ----------------------------------------------------
-        # DATOS DE MERCADO
+        # CATEGORÍA
+        # ----------------------------------------------------
+
+        category = classify_market(market)
+
+        if category is None:
+            continue
+
+        # ----------------------------------------------------
+        # NOMBRE
         # ----------------------------------------------------
 
         title = (
@@ -241,64 +431,48 @@ def process_markets(markets):
         )
 
         # ----------------------------------------------------
-        # PRECIOS
+        # YES BID
         # ----------------------------------------------------
 
         yes_bid = to_number(
-            market.get("yes_bid_dollars"),
-            None
+            market.get("yes_bid_dollars")
         )
 
-        yes_ask = to_number(
-            market.get("yes_ask_dollars"),
-            None
-        )
+        # ----------------------------------------------------
+        # NO BID
+        # ----------------------------------------------------
 
         no_bid = to_number(
-            market.get("no_bid_dollars"),
-            None
-        )
-
-        no_ask = to_number(
-            market.get("no_ask_dollars"),
-            None
+            market.get("no_bid_dollars")
         )
 
         # ----------------------------------------------------
         # VOLUMEN
         # ----------------------------------------------------
 
-        volume_raw = (
-            market.get("volume_24h_fp")
-            if market.get("volume_24h_fp") is not None
-            else market.get("volume_24h")
+        volume = market.get(
+            "volume_24h_fp"
         )
 
-        volume_24h = to_number(
-            volume_raw,
-            0
-        )
+        if volume is None:
+
+            volume = market.get(
+                "volume_24h",
+                0
+            )
+
+        volume = to_number(volume)
+
+        if volume is None:
+            volume = 0
 
         # ----------------------------------------------------
-        # OPEN INTEREST
-        # ----------------------------------------------------
-
-        oi_raw = (
-            market.get("open_interest_fp")
-            if market.get("open_interest_fp") is not None
-            else market.get("open_interest")
-        )
-
-        open_interest = to_number(
-            oi_raw,
-            0
-        )
-
-        # ----------------------------------------------------
-        # GUARDAR
+        # FILA
         # ----------------------------------------------------
 
         rows.append({
+
+            "Categoría": category,
 
             "Mercado": str(title),
 
@@ -306,20 +480,13 @@ def process_markets(markets):
 
             "Vencimiento": close_dt,
 
-            "Horas": float(hours_left),
+            "Horas": hours_left,
 
             "YES Bid": yes_bid,
 
-            "YES Ask": yes_ask,
-
             "NO Bid": no_bid,
 
-            "NO Ask": no_ask,
-
-            "Volumen 24h": float(volume_24h),
-
-            "Open Interest": float(open_interest)
-
+            "Volumen": volume
         })
 
     return pd.DataFrame(rows)
@@ -336,17 +503,15 @@ if st.button(
 ):
 
     st.cache_data.clear()
-
     st.rerun()
 
 
 # ============================================================
-# OBTENER DATOS
+# CARGAR DATOS
 # ============================================================
 
 with st.spinner(
-    f"Consultando Kalshi y buscando mercados "
-    f"que vencen en menos de {MAX_HOURS} horas..."
+    "🔎 Buscando mercados de Kalshi..."
 ):
 
     try:
@@ -360,7 +525,7 @@ with st.spinner(
     except Exception as error:
 
         st.error(
-            "No fue posible obtener los datos de Kalshi."
+            "❌ Error al consultar Kalshi"
         )
 
         st.exception(error)
@@ -375,250 +540,242 @@ with st.spinner(
 if df.empty:
 
     st.warning(
-        f"No encontramos mercados con vencimiento "
+        f"No encontramos mercados que venzan "
         f"en menos de {MAX_HOURS} horas."
     )
 
     st.info(
-        f"Mercados descargados desde Kalshi: "
-        f"{len(raw_markets)}"
+        f"Kalshi devolvió "
+        f"{len(raw_markets):,} mercados."
     )
 
     st.stop()
 
 
 # ============================================================
-# ORDENAR
+# FUNCIÓN PARA MOSTRAR TABLA
 # ============================================================
 
-df = df.sort_values(
-    "Volumen 24h",
-    ascending=False
-).head(TOP_N)
+def show_category(
+    dataframe,
+    category,
+    icon
+):
 
+    section = dataframe[
+        dataframe["Categoría"] == category
+    ].copy()
 
-# ============================================================
-# MÉTRICAS
-# ============================================================
+    if section.empty:
 
-max_volume = float(
-    df["Volumen 24h"]
-    .fillna(0)
-    .max()
-)
-
-min_hours = float(
-    df["Horas"]
-    .fillna(0)
-    .min()
-)
-
-total_volume = float(
-    df["Volumen 24h"]
-    .fillna(0)
-    .sum()
-)
-
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-
-    st.metric(
-        "Mercados",
-        len(df)
-    )
-
-with col2:
-
-    st.metric(
-        "Mayor volumen 24h",
-        f"{max_volume:,.0f}"
-    )
-
-with col3:
-
-    st.metric(
-        "Próximo vencimiento",
-        f"{min_hours:.1f} h"
-    )
-
-
-st.divider()
-
-
-# ============================================================
-# PREPARAR TABLA
-# ============================================================
-
-display = df.copy()
-
-display.insert(
-    0,
-    "#",
-    range(
-        1,
-        len(display) + 1
-    )
-)
-
-
-# ------------------------------------------------------------
-# FORMATO DE PRECIOS
-# ------------------------------------------------------------
-
-def format_price(value):
-
-    if pd.isna(value):
-
-        return "—"
-
-    try:
-
-        return f"{float(value):.2f}"
-
-    except:
-
-        return "—"
-
-
-for column in [
-    "YES Bid",
-    "YES Ask",
-    "NO Bid",
-    "NO Ask"
-]:
-
-    display[column] = display[
-        column
-    ].apply(format_price)
-
-
-# ------------------------------------------------------------
-# FORMATO VOLUMEN
-# ------------------------------------------------------------
-
-display["Volumen 24h"] = display[
-    "Volumen 24h"
-].apply(
-    lambda x:
-    f"{float(x):,.0f}"
-)
-
-
-display["Open Interest"] = display[
-    "Open Interest"
-].apply(
-    lambda x:
-    f"{float(x):,.0f}"
-)
-
-
-# ------------------------------------------------------------
-# FORMATO HORAS
-# ------------------------------------------------------------
-
-display["Horas"] = display[
-    "Horas"
-].apply(
-    lambda x:
-    f"{float(x):.1f} h"
-)
-
-
-# ------------------------------------------------------------
-# FORMATO FECHA
-# ------------------------------------------------------------
-
-display["Vencimiento"] = display[
-    "Vencimiento"
-].apply(
-    lambda x:
-    x.strftime("%d/%m %H:%M")
-    if pd.notna(x)
-    else "—"
-)
-
-
-# ============================================================
-# TABLA
-# ============================================================
-
-st.subheader(
-    "🔥 Top mercados por volumen"
-)
-
-st.dataframe(
-    display,
-    use_container_width=True,
-    hide_index=True,
-
-    column_config={
-
-        "#": st.column_config.NumberColumn(
-            "#",
-            width="small"
-        ),
-
-        "Mercado": st.column_config.TextColumn(
-            "Mercado",
-            width="large"
-        ),
-
-        "Símbolo": st.column_config.TextColumn(
-            "Símbolo",
-            width="medium"
-        ),
-
-        "Vencimiento": st.column_config.TextColumn(
-            "Vencimiento",
-            width="medium"
-        ),
-
-        "Horas": st.column_config.TextColumn(
-            "Tiempo",
-            width="small"
-        ),
-
-        "YES Bid": st.column_config.TextColumn(
-            "YES Bid",
-            width="small"
-        ),
-
-        "YES Ask": st.column_config.TextColumn(
-            "YES Ask",
-            width="small"
-        ),
-
-        "NO Bid": st.column_config.TextColumn(
-            "NO Bid",
-            width="small"
-        ),
-
-        "NO Ask": st.column_config.TextColumn(
-            "NO Ask",
-            width="small"
-        ),
-
-        "Volumen 24h": st.column_config.TextColumn(
-            "Vol. 24h",
-            width="medium"
-        ),
-
-        "Open Interest": st.column_config.TextColumn(
-            "Open Interest",
-            width="medium"
+        st.markdown(
+            f"### {icon} {category}"
         )
-    }
+
+        st.info(
+            "No hay mercados disponibles "
+            "en esta categoría."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # ORDENAR POR VOLUMEN
+    # --------------------------------------------------------
+
+    section = section.sort_values(
+        "Volumen",
+        ascending=False
+    ).head(TOP_N)
+
+    # --------------------------------------------------------
+    # COPIA PARA PRESENTACIÓN
+    # --------------------------------------------------------
+
+    display = section.copy()
+
+    # --------------------------------------------------------
+    # NÚMERO
+    # --------------------------------------------------------
+
+    display.insert(
+        0,
+        "#",
+        range(
+            1,
+            len(display) + 1
+        )
+    )
+
+    # --------------------------------------------------------
+    # VENCIMIENTO
+    # --------------------------------------------------------
+
+    display["Vencimiento"] = display[
+        "Vencimiento"
+    ].apply(
+
+        lambda x:
+        x.strftime("%d %b · %H:%M")
+
+        if pd.notna(x)
+
+        else "—"
+    )
+
+    # --------------------------------------------------------
+    # YES BID
+    # --------------------------------------------------------
+
+    display["YES Bid"] = display[
+        "YES Bid"
+    ].apply(
+
+        lambda x:
+        f"{float(x):.2f}"
+
+        if pd.notna(x)
+
+        else "—"
+    )
+
+    # --------------------------------------------------------
+    # NO BID
+    # --------------------------------------------------------
+
+    display["NO Bid"] = display[
+        "NO Bid"
+    ].apply(
+
+        lambda x:
+        f"{float(x):.2f}"
+
+        if pd.notna(x)
+
+        else "—"
+    )
+
+    # --------------------------------------------------------
+    # HORAS
+    # --------------------------------------------------------
+
+    display["Horas"] = display[
+        "Horas"
+    ].apply(
+
+        lambda x:
+        f"{float(x):.1f} h"
+    )
+
+    # --------------------------------------------------------
+    # COLUMNAS FINALES
+    # --------------------------------------------------------
+
+    display = display[
+        [
+            "#",
+            "Mercado",
+            "Vencimiento",
+            "Horas",
+            "YES Bid",
+            "NO Bid"
+        ]
+    ]
+
+    # --------------------------------------------------------
+    # TÍTULO
+    # --------------------------------------------------------
+
+    st.markdown(
+        f'<div class="category-title">'
+        f'{icon} {category}'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    st.caption(
+        f"Top {len(display)} mercados · "
+        f"ordenados por volumen 24h"
+    )
+
+    # --------------------------------------------------------
+    # TABLA
+    # --------------------------------------------------------
+
+    st.dataframe(
+
+        display,
+
+        use_container_width=True,
+
+        hide_index=True,
+
+        column_config={
+
+            "#": st.column_config.NumberColumn(
+                "#",
+                width="small"
+            ),
+
+            "Mercado": st.column_config.TextColumn(
+                "Mercado / Evento",
+                width="large"
+            ),
+
+            "Vencimiento": st.column_config.TextColumn(
+                "Vencimiento",
+                width="medium"
+            ),
+
+            "Horas": st.column_config.TextColumn(
+                "Tiempo restante",
+                width="small"
+            ),
+
+            "YES Bid": st.column_config.TextColumn(
+                "YES Bid",
+                width="small"
+            ),
+
+            "NO Bid": st.column_config.TextColumn(
+                "NO Bid",
+                width="small"
+            )
+        }
+    )
+
+    st.markdown("---")
+
+
+# ============================================================
+# TABLAS
+# ============================================================
+
+show_category(
+    df,
+    "Economía",
+    "📈"
+)
+
+show_category(
+    df,
+    "Finanzas",
+    "💰"
+)
+
+show_category(
+    df,
+    "Deportes",
+    "🏆"
 )
 
 
 # ============================================================
-# INFORMACIÓN
+# PIE
 # ============================================================
 
 st.caption(
-    f"Última actualización: "
+    f"Actualizado: "
     f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} · "
-    f"Se analizaron {len(raw_markets):,} mercados recibidos de Kalshi."
+    f"Universo analizado: {len(raw_markets):,} mercados"
 )
