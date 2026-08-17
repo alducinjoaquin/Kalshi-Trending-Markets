@@ -121,13 +121,24 @@ def prepare_data(markets):
 
     for m in markets:
 
+
+
         hours = hours_to_close(
-            m.get("close_time", "")
-        )
+    m.get("close_time", "")
+)
 
-        if hours is None:
-            continue
+if hours is None:
+    continue
 
+if m.get("status") not in ["open", "active"]:
+    continue
+
+if hours < 24 or hours > 48:
+    continue
+        
+        
+        
+        
         # Solo 24–48 horas
         if hours < 24 or hours > 48:
             continue
