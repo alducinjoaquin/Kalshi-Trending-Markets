@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
 # ============================================================
 # CONFIGURACIÓN
@@ -178,42 +179,86 @@ def get_target_series_tickers():
 # PASO 2 — TRAER EVENTOS SOLO DE ESAS SERIES ESPECÍFICAS
 # ============================================================
 
-@st.cache_data(ttl=60)
-def get_events_for_series(series_ticker):
-    """Trae eventos abiertos de UNA serie puntual (paginado por si acaso)."""
+def _fetch_one_series(session, series_ticker):
+    """Trae eventos abiertos de UNA serie puntual (paginado por si acaso).
+    Nunca lanza excepción hacia afuera: si falla, devuelve lista vacía,
+    para que una serie problemática no tumbe a las demás."""
 
     events = []
     cursor = ""
 
-    for _ in range(10):
+    try:
+        for _ in range(10):
 
-        params = {
-            "series_ticker": series_ticker,
-            "status": "open",
-            "with_nested_markets": "true",
-            "limit": 200,
-        }
+            params = {
+                "series_ticker": series_ticker,
+                "status": "open",
+                "with_nested_markets": "true",
+                "limit": 200,
+            }
 
-        if cursor:
-            params["cursor"] = cursor
+            if cursor:
+                params["cursor"] = cursor
 
-        response = requests.get(f"{BASE_URL}/events", params=params, timeout=30)
-        response.raise_for_status()
+            response = session.get(f"{BASE_URL}/events", params=params, timeout=8)
+            response.raise_for_status()
 
-        data = response.json()
-        batch = data.get("events", [])
+            data = response.json()
+            batch = data.get("events", [])
 
-        if not batch:
-            break
+            if not batch:
+                break
 
-        events.extend(batch)
+            events.extend(batch)
 
-        cursor = data.get("cursor", "")
+            cursor = data.get("cursor", "")
 
-        if not cursor:
-            break
+            if not cursor:
+                break
+
+    except requests.exceptions.RequestException:
+        return []
 
     return events
+
+
+@st.cache_data(ttl=60)
+def get_events_for_all_targets(series_tickers, overall_timeout_seconds=45):
+    """
+    Trae eventos de VARIAS series en paralelo (no una por una), con un
+    tope de tiempo total. Si algunas series no alcanzan a responder
+    dentro del tope, se ignoran (mejor mostrar resultados parciales
+    que quedarse colgado indefinidamente).
+    """
+
+    results = {}
+
+    with requests.Session() as session:
+
+        with ThreadPoolExecutor(max_workers=15) as executor:
+
+            futures = {
+                executor.submit(_fetch_one_series, session, ticker): ticker
+                for ticker in series_tickers
+            }
+
+            try:
+                for future in as_completed(futures, timeout=overall_timeout_seconds):
+                    ticker = futures[future]
+                    try:
+                        results[ticker] = future.result()
+                    except Exception:
+                        results[ticker] = []
+
+            except FuturesTimeoutError:
+                # Se acabó el tiempo global: lo que no terminó, se
+                # cuenta como vacío en vez de bloquear la app.
+                for future, ticker in futures.items():
+                    if ticker not in results:
+                        results[ticker] = []
+                        future.cancel()
+
+    return results
 
 
 # ============================================================
@@ -228,9 +273,11 @@ def build_dataframe(targets):
     rows = []
     total_events_fetched = 0
 
+    events_by_series = get_events_for_all_targets(tuple(targets.keys()))
+
     for series_ticker, category_final in targets.items():
 
-        events = get_events_for_series(series_ticker)
+        events = events_by_series.get(series_ticker, [])
         total_events_fetched += len(events)
 
         for event in events:
@@ -304,6 +351,7 @@ with st.spinner("🔎 Consultando mercados de Kalshi..."):
 
     try:
         targets = get_target_series_tickers()
+        st.caption(f"Consultando {len(targets)} series en paralelo (máx. 45s)...")
         df, total_events_fetched = build_dataframe(targets)
 
     except requests.exceptions.RequestException as error:
