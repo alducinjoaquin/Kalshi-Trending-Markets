@@ -215,8 +215,9 @@ def discover_index_series():
 
 def _fetch_one_series(session, series_ticker):
     """Trae eventos abiertos de UNA serie puntual (paginado por si acaso).
-    Nunca lanza excepción hacia afuera: si falla, devuelve lista vacía,
-    para que una serie problemática no tumbe a las demás."""
+    Nunca lanza excepción hacia afuera. Devuelve None si la petición
+    falló (para poder distinguirlo de "la serie no tiene eventos"),
+    o la lista de eventos (posiblemente vacía) si sí respondió."""
 
     events = []
     cursor = ""
@@ -251,7 +252,7 @@ def _fetch_one_series(session, series_ticker):
                 break
 
     except requests.exceptions.RequestException:
-        return []
+        return None
 
     return events
 
@@ -261,11 +262,12 @@ def get_events_for_all_targets(series_tickers, overall_timeout_seconds=45):
     """
     Trae eventos de VARIAS series en paralelo (no una por una), con un
     tope de tiempo total. Si algunas series no alcanzan a responder
-    dentro del tope, se ignoran (mejor mostrar resultados parciales
-    que quedarse colgado indefinidamente).
+    dentro del tope, se cuentan como fallidas (no se confunden con
+    "la serie no tiene eventos") y se muestran aparte.
+    Devuelve (resultados, num_fallidas, num_total).
     """
 
-    results = {}
+    raw_results = {}
 
     with requests.Session() as session:
 
@@ -280,19 +282,28 @@ def get_events_for_all_targets(series_tickers, overall_timeout_seconds=45):
                 for future in as_completed(futures, timeout=overall_timeout_seconds):
                     ticker = futures[future]
                     try:
-                        results[ticker] = future.result()
+                        raw_results[ticker] = future.result()
                     except Exception:
-                        results[ticker] = []
+                        raw_results[ticker] = None
 
             except FuturesTimeoutError:
                 # Se acabó el tiempo global: lo que no terminó, se
-                # cuenta como vacío en vez de bloquear la app.
+                # marca como fallido en vez de bloquear la app.
                 for future, ticker in futures.items():
-                    if ticker not in results:
-                        results[ticker] = []
+                    if ticker not in raw_results:
+                        raw_results[ticker] = None
                         future.cancel()
 
-    return results
+    num_fallidas = sum(1 for v in raw_results.values() if v is None)
+    num_total = len(raw_results)
+
+    resultados = {
+        ticker: (events if events is not None else [])
+        for ticker, events in raw_results.items()
+    }
+
+    return resultados, num_fallidas, num_total
+
 
 
 # ============================================================
@@ -307,7 +318,7 @@ def build_dataframe(targets):
     rows = []
     total_events_fetched = 0
 
-    events_by_series = get_events_for_all_targets(tuple(targets.keys()))
+    events_by_series, num_fallidas, num_total = get_events_for_all_targets(tuple(targets.keys()))
 
     for series_ticker, category_final in targets.items():
 
@@ -373,7 +384,7 @@ def build_dataframe(targets):
         "Interés Abierto", "Ticker",
     ]
 
-    return pd.DataFrame(rows, columns=columns), total_events_fetched
+    return pd.DataFrame(rows, columns=columns), total_events_fetched, num_fallidas, num_total
 
 
 def build_indices_dataframe():
@@ -389,7 +400,7 @@ def build_indices_dataframe():
     hoy = now.date()
     manana = hoy + timedelta(days=1)
 
-    events_by_series = get_events_for_all_targets(tuple(index_series.keys()))
+    events_by_series, indices_num_fallidas, indices_num_total = get_events_for_all_targets(tuple(index_series.keys()))
 
     rows = []
 
@@ -455,7 +466,7 @@ def build_indices_dataframe():
         "Vencimiento", "YES Bid", "NO Bid", "Volumen", "Interés Abierto",
     ]
 
-    return pd.DataFrame(rows, columns=columns)
+    return pd.DataFrame(rows, columns=columns), indices_num_fallidas, indices_num_total
 
 
 # ============================================================
@@ -476,8 +487,8 @@ with st.spinner("🔎 Consultando mercados de Kalshi..."):
     try:
         targets = get_target_series_tickers()
         st.caption(f"Consultando {len(targets)} series en paralelo (máx. 45s)...")
-        df, total_events_fetched = build_dataframe(targets)
-        indices_df = build_indices_dataframe()
+        df, total_events_fetched, num_fallidas, num_total = build_dataframe(targets)
+        indices_df, indices_num_fallidas, indices_num_total = build_indices_dataframe()
 
     except requests.exceptions.RequestException as error:
         st.error("❌ Error de conexión con Kalshi.")
@@ -501,6 +512,20 @@ if df.empty and indices_df.empty:
         f"(ganador del partido: NFL, NCAAF, MLB, NBA) que venzan en "
         f"menos de {MAX_HOURS} horas (o, para Índices, hoy/mañana)."
     )
+
+    if num_fallidas > 0 or indices_num_fallidas > 0:
+        st.error(
+            f"⚠️ Esto puede ser un problema de conexión, no de datos: "
+            f"{num_fallidas}/{num_total} series de Economía/Deportes y "
+            f"{indices_num_fallidas}/{indices_num_total} series de Índices "
+            f"no respondieron a tiempo. Prueba 'Actualizar datos' de nuevo."
+        )
+    else:
+        st.info(
+            f"Todas las series respondieron correctamente "
+            f"({num_total} Economía/Deportes, {indices_num_total} Índices) — "
+            f"esta vez genuinamente no hay mercados en la ventana pedida."
+        )
 
     st.info(
         f"Series consultadas (Economía/Deportes): {len(targets)} · "
