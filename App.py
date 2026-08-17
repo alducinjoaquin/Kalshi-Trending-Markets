@@ -3,20 +3,22 @@ import requests
 import pandas as pd
 from datetime import datetime, timezone
 
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
 st.set_page_config(
-    page_title="Kalshi Trending",
+    page_title="Kalshi Trending Markets",
     page_icon="📊",
     layout="wide"
 )
 
-API = "https://api.elections.kalshi.com/trade-api/v2/markets"
+API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
 
-st.title("📊 Kalshi Trending Markets")
-st.caption("Mercados con vencimiento entre 24 y 48 horas")
 
-# --------------------------------------------------
-# FUNCIONES
-# --------------------------------------------------
+# ============================================================
+# OBTENER MERCADOS
+# ============================================================
 
 def get_markets():
 
@@ -34,7 +36,7 @@ def get_markets():
             params["cursor"] = cursor
 
         response = requests.get(
-            API,
+            API_URL,
             params=params,
             timeout=30
         )
@@ -43,7 +45,9 @@ def get_markets():
 
         data = response.json()
 
-        markets.extend(data.get("markets", []))
+        markets.extend(
+            data.get("markets", [])
+        )
 
         cursor = data.get("cursor")
 
@@ -53,22 +57,34 @@ def get_markets():
     return markets
 
 
+# ============================================================
+# HORAS HASTA EL VENCIMIENTO
+# ============================================================
+
 def hours_to_close(close_time):
 
     try:
+
         close = datetime.fromisoformat(
             close_time.replace("Z", "+00:00")
         )
 
         now = datetime.now(timezone.utc)
 
-        return (close - now).total_seconds() / 3600
+        return (
+            close - now
+        ).total_seconds() / 3600
 
     except:
+
         return None
 
 
-def category(market):
+# ============================================================
+# CLASIFICACIÓN PROVISIONAL
+# ============================================================
+
+def get_category(market):
 
     text = (
         str(market.get("title", "")) +
@@ -78,197 +94,491 @@ def category(market):
         str(market.get("ticker", ""))
     ).lower()
 
+    # -----------------------------
+    # DEPORTES
+    # -----------------------------
+
     sports_words = [
-        "nfl", "nba", "wnba", "nhl", "mlb",
-        "soccer", "football", "baseball",
-        "basketball", "hockey", "tennis",
-        "golf", "ufc", "boxing",
-        "match", "game", "team"
+        "nfl",
+        "nba",
+        "wnba",
+        "nhl",
+        "mlb",
+        "soccer",
+        "football",
+        "baseball",
+        "basketball",
+        "hockey",
+        "tennis",
+        "golf",
+        "ufc",
+        "boxing",
+        "match",
+        "game",
+        "team",
+        "league",
+        "championship"
     ]
+
+    # -----------------------------
+    # FINANZAS
+    # -----------------------------
 
     finance_words = [
-        "bitcoin", "ethereum", "crypto",
-        "stock", "stocks", "nasdaq",
-        "s&p", "dow", "earnings",
-        "gold", "oil", "finance",
-        "financial", "market"
+        "bitcoin",
+        "btc",
+        "ethereum",
+        "eth",
+        "crypto",
+        "stock",
+        "stocks",
+        "nasdaq",
+        "s&p",
+        "sp500",
+        "dow",
+        "earnings",
+        "gold",
+        "silver",
+        "oil",
+        "finance",
+        "financial",
+        "market"
     ]
+
+    # -----------------------------
+    # ECONOMÍA
+    # -----------------------------
 
     economy_words = [
-        "fed", "federal reserve",
-        "inflation", "cpi", "gdp",
-        "jobs", "unemployment",
-        "interest rate", "recession",
-        "economy", "economic",
-        "tariff", "treasury"
+        "fed",
+        "federal reserve",
+        "inflation",
+        "cpi",
+        "gdp",
+        "jobs",
+        "employment",
+        "unemployment",
+        "interest rate",
+        "interest rates",
+        "recession",
+        "economy",
+        "economic",
+        "tariff",
+        "treasury"
     ]
 
-    if any(word in text for word in sports_words):
+    if any(
+        word in text
+        for word in sports_words
+    ):
         return "Deportes"
 
-    if any(word in text for word in finance_words):
+    if any(
+        word in text
+        for word in finance_words
+    ):
         return "Finanzas"
 
-    if any(word in text for word in economy_words):
+    if any(
+        word in text
+        for word in economy_words
+    ):
         return "Economía"
 
     return None
 
 
+# ============================================================
+# PREPARAR DATOS
+# ============================================================
+
 def prepare_data(markets):
 
     rows = []
 
-    for m in markets:
+    for market in markets:
 
+        # --------------------------------
+        # STATUS
+        # --------------------------------
 
+        status = market.get("status")
+
+        if status not in [
+            "open",
+            "active"
+        ]:
+            continue
+
+        # --------------------------------
+        # VENCIMIENTO
+        # --------------------------------
 
         hours = hours_to_close(
-    m.get("close_time", "")
-)
+            market.get(
+                "close_time",
+                ""
+            )
+        )
 
-if hours is None:
-    continue
-
-if m.get("status") not in ["open", "active"]:
-    continue
-
-if hours < 24 or hours > 48:
-    continue
-        
-        
-        
-        
-        # Solo 24–48 horas
-        if hours < 24 or hours > 48:
+        if hours is None:
             continue
 
-        cat = category(m)
+        # Solo mercados que vencen
+        # entre 24 y 48 horas
 
-        if cat is None:
+        if hours < 24:
             continue
+
+        if hours > 48:
+            continue
+
+        # --------------------------------
+        # CATEGORÍA
+        # --------------------------------
+
+        category = get_category(
+            market
+        )
+
+        if category is None:
+            continue
+
+        # --------------------------------
+        # DATOS
+        # --------------------------------
+
+        title = (
+            market.get("title")
+            or market.get("subtitle")
+            or market.get("ticker")
+            or "Sin nombre"
+        )
+
+        yes_bid = market.get(
+            "yes_bid_dollars"
+        )
+
+        yes_ask = market.get(
+            "yes_ask_dollars"
+        )
+
+        no_bid = market.get(
+            "no_bid_dollars"
+        )
+
+        no_ask = market.get(
+            "no_ask_dollars"
+        )
+
+        volume = market.get(
+            "volume_24h_fp",
+            0
+        )
+
+        open_interest = market.get(
+            "open_interest_fp",
+            0
+        )
 
         rows.append({
-            "Categoría": cat,
-            "Mercado": (
-                m.get("title")
-                or m.get("subtitle")
-                or m.get("ticker")
-            ),
-            "YES": m.get("yes_bid_dollars"),
-            "NO": m.get("no_bid_dollars"),
-            "Volumen 24h": m.get("volume_24h_fp", 0),
-            "Open Interest": m.get("open_interest_fp", 0),
+
+            "Categoría": category,
+
+            "Mercado": title,
+
+            "YES Bid": yes_bid,
+
+            "YES Ask": yes_ask,
+
+            "NO Bid": no_bid,
+
+            "NO Ask": no_ask,
+
+            "Volumen 24h": volume,
+
+            "Open Interest": open_interest,
+
             "Horas": hours
         })
 
     return pd.DataFrame(rows)
 
 
-def format_table(df):
+# ============================================================
+# FORMATO DE TABLA
+# ============================================================
 
-    if df.empty:
-        return df
+def format_table(df):
 
     result = df.copy()
 
-    result["YES"] = result["YES"].apply(
-        lambda x: f"{float(x):.2f}"
-        if pd.notna(x) else "—"
+    if result.empty:
+        return result
+
+    # --------------------------------
+    # PRECIOS
+    # --------------------------------
+
+    price_columns = [
+        "YES Bid",
+        "YES Ask",
+        "NO Bid",
+        "NO Ask"
+    ]
+
+    for column in price_columns:
+
+        result[column] = result[column].apply(
+
+            lambda x:
+                f"{float(x):.2f}"
+                if pd.notna(x)
+                else "—"
+
+        )
+
+    # --------------------------------
+    # VOLUMEN
+    # --------------------------------
+
+    result["Volumen 24h"] = (
+        result["Volumen 24h"]
+        .apply(
+            lambda x:
+                f"{float(x):,.0f}"
+        )
     )
 
-    result["NO"] = result["NO"].apply(
-        lambda x: f"{float(x):.2f}"
-        if pd.notna(x) else "—"
+    # --------------------------------
+    # OPEN INTEREST
+    # --------------------------------
+
+    result["Open Interest"] = (
+        result["Open Interest"]
+        .apply(
+            lambda x:
+                f"{float(x):,.0f}"
+        )
     )
 
-    result["Volumen 24h"] = result["Volumen 24h"].apply(
-        lambda x: f"{float(x):,.0f}"
-    )
+    # --------------------------------
+    # HORAS
+    # --------------------------------
 
-    result["Open Interest"] = result["Open Interest"].apply(
-        lambda x: f"{float(x):,.0f}"
-    )
-
-    result["Horas"] = result["Horas"].apply(
-        lambda x: f"{x:.1f} h"
+    result["Horas"] = (
+        result["Horas"]
+        .apply(
+            lambda x:
+                f"{x:.1f} h"
+        )
     )
 
     return result
 
 
-# --------------------------------------------------
+# ============================================================
 # INTERFAZ
-# --------------------------------------------------
+# ============================================================
 
-if st.button("🔄 REFRESH", use_container_width=True):
+st.title(
+    "📊 Kalshi Trending Markets"
+)
 
-    with st.spinner("Consultando Kalshi..."):
+st.caption(
+    "Top mercados por volumen · "
+    "Vencimiento entre 24 y 48 horas"
+)
+
+# ============================================================
+# BOTÓN REFRESH
+# ============================================================
+
+if st.button(
+    "🔄 REFRESH",
+    use_container_width=True
+):
+
+    with st.spinner(
+        "Consultando mercados de Kalshi..."
+    ):
 
         try:
 
+            # --------------------------------
+            # DESCARGAR
+            # --------------------------------
+
             markets = get_markets()
 
-            df = prepare_data(markets)
+            # --------------------------------
+            # PROCESAR
+            # --------------------------------
+
+            df = prepare_data(
+                markets
+            )
+
+            # --------------------------------
+            # RESULTADO
+            # --------------------------------
 
             if df.empty:
 
                 st.warning(
-                    "No encontramos mercados que cumplan "
-                    "los filtros actuales."
+                    "No encontramos mercados "
+                    "que cumplan las condiciones."
                 )
 
             else:
 
                 st.success(
-                    f"{len(df)} mercados encontrados."
+                    f"{len(df)} mercados "
+                    f"encontrados."
                 )
 
-                for cat in [
-                    "Economía",
-                    "Finanzas",
-                    "Deportes"
-                ]:
+                # =================================================
+                # ECONOMÍA
+                # =================================================
+
+                economy = df[
+                    df["Categoría"]
+                    == "Economía"
+                ].copy()
+
+                economy = economy.sort_values(
+                    "Volumen 24h",
+                    ascending=False
+                ).head(10)
+
+                if not economy.empty:
 
                     st.subheader(
-                        f"{'📈' if cat == 'Economía' else '💰' if cat == 'Finanzas' else '🏆'} {cat}"
+                        "📈 Economía — Top 10"
                     )
 
-                    section = df[
-                        df["Categoría"] == cat
-                    ].copy()
-
-                    section = section.sort_values(
-                        "Volumen 24h",
-                        ascending=False
-                    ).head(10)
-
-                    section = section.drop(
+                    economy = economy.drop(
                         columns=["Categoría"]
                     )
 
-                    section.insert(
+                    economy.insert(
                         0,
                         "#",
-                        range(1, len(section) + 1)
+                        range(
+                            1,
+                            len(economy) + 1
+                        )
                     )
 
-                    section = format_table(section)
+                    economy = format_table(
+                        economy
+                    )
 
                     st.dataframe(
-                        section,
+                        economy,
                         use_container_width=True,
                         hide_index=True
                     )
 
-        except Exception as e:
+                # =================================================
+                # FINANZAS
+                # =================================================
+
+                finance = df[
+                    df["Categoría"]
+                    == "Finanzas"
+                ].copy()
+
+                finance = finance.sort_values(
+                    "Volumen 24h",
+                    ascending=False
+                ).head(10)
+
+                if not finance.empty:
+
+                    st.subheader(
+                        "💰 Finanzas — Top 10"
+                    )
+
+                    finance = finance.drop(
+                        columns=["Categoría"]
+                    )
+
+                    finance.insert(
+                        0,
+                        "#",
+                        range(
+                            1,
+                            len(finance) + 1
+                        )
+                    )
+
+                    finance = format_table(
+                        finance
+                    )
+
+                    st.dataframe(
+                        finance,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                # =================================================
+                # DEPORTES
+                # =================================================
+
+                sports = df[
+                    df["Categoría"]
+                    == "Deportes"
+                ].copy()
+
+                sports = sports.sort_values(
+                    "Volumen 24h",
+                    ascending=False
+                ).head(10)
+
+                if not sports.empty:
+
+                    st.subheader(
+                        "🏆 Deportes — Top 10"
+                    )
+
+                    sports = sports.drop(
+                        columns=["Categoría"]
+                    )
+
+                    sports.insert(
+                        0,
+                        "#",
+                        range(
+                            1,
+                            len(sports) + 1
+                        )
+                    )
+
+                    sports = format_table(
+                        sports
+                    )
+
+                    st.dataframe(
+                        sports,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+        except Exception as error:
 
             st.error(
-                f"No fue posible obtener los datos: {e}"
+                "Error al consultar Kalshi:"
+            )
+
+            st.exception(
+                error
             )
 
 else:
 
     st.info(
-        "Pulsa 🔄 REFRESH para cargar los mercados."
+        "Pulsa 🔄 REFRESH para cargar "
+        "los mercados actuales."
     )
