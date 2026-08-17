@@ -136,6 +136,16 @@ def format_pct(value):
 @st.cache_data(ttl=60)
 def get_events():
 
+events = get_events()
+        df = build_dataframe(events)
+
+        st.write("Total eventos:", len(events))
+        st.write("Categorías únicas:", sorted(set(str(e.get("category")) for e in events)))
+        st.write("Series tickers únicos:", sorted(set(str(e.get("series_ticker")) for e in events))[:50])
+
+
+
+  
     events = []
     cursor = ""
 
