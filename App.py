@@ -16,7 +16,7 @@ st.set_page_config(
 API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
 
 # ============================================================
-# CONSULTA A LA API
+# CONSULTA A LA API (Obtiene todos los mercados abiertos)
 # ============================================================
 
 @st.cache_data(ttl=300)
@@ -24,7 +24,8 @@ def fetch_raw_markets():
     markets = []
     cursor = ""
     
-    for _ in range(15):
+    # 25 páginas para capturar la mayor cantidad de eventos activos
+    for _ in range(25):
         params = {"limit": 1000, "status": "open"}
         if cursor:
             params["cursor"] = cursor
@@ -44,7 +45,7 @@ def fetch_raw_markets():
     return markets
 
 # ============================================================
-# HELPER DE TIEMPO
+# HORAS AL VENCIMIENTO
 # ============================================================
 
 def get_hours_to_close(close_time_str):
@@ -59,115 +60,83 @@ def get_hours_to_close(close_time_str):
         return None
 
 # ============================================================
-# FILTRADO Y CLASIFICACIÓN ESTRICTA
+# PROCESAMIENTO SIMPLIFICADO
 # ============================================================
 
-def process_sports_markets(markets):
-    # Exclusivamente NFL, NCAA Football, NBA, MLB
-    sports_keys = ["nfl", "ncaa", "college football", "ncaaf", "nba", "mlb"]
-    rows = []
+def process_markets(markets):
+    sports_rows = []
+    fin_rows = []
 
     for m in markets:
-        ticker = str(m.get("ticker", "")).lower()
-        title = str(m.get("title", "")).lower()
-        sub = str(m.get("subtitle", "")).lower()
-        category = str(m.get("category", "")).lower()
+        # 1. Vencimiento en 1 a 2 días (0 a 48 horas)
+        close_time = m.get("close_time") or m.get("expiration_time")
+        hours = get_hours_to_close(close_time)
 
-        text_block = f"{ticker} {title} {sub} {category}"
-
-        # Validar si pertenece a los deportes permitidos
-        if not any(k in text_block for k in sports_keys):
-            continue
-
-        # Validar vencimiento (1 a 2 días: 0 a 48h)
-        hours = get_hours_to_close(m.get("close_time") or m.get("expiration_time"))
         if hours is None or hours < 0 or hours > 48:
             continue
 
-        # Formatear datos limpios
-        event_name = m.get("title") or m.get("subtitle") or m.get("ticker")
-        yes_price = m.get("yes_ask") or m.get("yes_bid") or 0
-        no_price = m.get("no_ask") or m.get("no_bid") or 0
-        volume = float(m.get("volume_24h") or m.get("volume") or 0)
+        # 2. Requisito de Volumen de operaciones
+        volume = float(m.get("volume_24h") or m.get("volume_24h_fp") or m.get("volume") or 0)
+        if volume <= 0:
+            continue
 
-        rows.append({
-            "Evento": event_name,
+        # 3. Datos del Mercado
+        title = m.get("title") or m.get("subtitle") or m.get("ticker") or "Mercado sin título"
+        
+        # Precios
+        yes_val = m.get("yes_ask") or m.get("yes_bid") or m.get("last_price") or 0
+        no_val = m.get("no_ask") or m.get("no_bid") or (100 - yes_val if isinstance(yes_val, (int, float)) and yes_val > 0 else 0)
+
+        row = {
+            "Evento": title,
             "Terminación": f"En {hours:.1f} hrs",
-            "Valor YES": f"{yes_price}¢" if isinstance(yes_price, (int, float)) else str(yes_price),
-            "Valor NO": f"{no_price}¢" if isinstance(no_price, (int, float)) else str(no_price),
+            "Valor YES": f"{yes_val}¢" if isinstance(yes_val, (int, float)) else str(yes_val),
+            "Valor NO": f"{no_val}¢" if isinstance(no_val, (int, float)) else str(no_val),
             "_vol": volume
-        })
+        }
 
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("_vol", ascending=False).head(10).drop(columns=["_vol"])
-    return df
+        # Categorización por etiqueta nativa de Kalshi o ticker
+        category_raw = str(m.get("category", "")).lower()
+        ticker_raw = str(m.get("ticker", "")).lower()
 
+        is_sports = any(x in category_raw or x in ticker_raw for x in ["sport", "sports", "nfl", "nba", "mlb", "ncaa"])
+        
+        if is_sports:
+            sports_rows.append(row)
+        else:
+            fin_rows.append(row)
 
-def process_finance_econ_markets(markets):
-    # Finanzas y Economía
-    fin_keys = ["fed", "cpi", "gdp", "jobs", "inflation", "rate", "treasury", "s&p", "sp500", "nasdaq", "dow", "btc", "bitcoin", "eth", "nvda", "aapl", "tsla"]
-    # Excluir explícitamente cualquier cosa deportiva
-    sports_exclude = ["nfl", "nba", "mlb", "game", "match", "vs"]
-    rows = []
+    # Convertir a DataFrames y ordenar por volumen de mayor a menor
+    df_sports = pd.DataFrame(sports_rows)
+    if not df_sports.empty:
+        df_sports = df_sports.sort_values("_vol", ascending=False).head(10).drop(columns=["_vol"])
 
-    for m in markets:
-        ticker = str(m.get("ticker", "")).lower()
-        title = str(m.get("title", "")).lower()
-        sub = str(m.get("subtitle", "")).lower()
-        category = str(m.get("category", "")).lower()
+    df_fin = pd.DataFrame(fin_rows)
+    if not df_fin.empty:
+        df_fin = df_fin.sort_values("_vol", ascending=False).head(10).drop(columns=["_vol"])
 
-        text_block = f"{ticker} {title} {sub} {category}"
-
-        if any(ex in text_block for ex in sports_exclude):
-            continue
-
-        if not any(k in text_block for k in fin_keys):
-            continue
-
-        hours = get_hours_to_close(m.get("close_time") or m.get("expiration_time"))
-        if hours is None or hours < 0 or hours > 48:
-            continue
-
-        event_name = m.get("title") or m.get("subtitle") or m.get("ticker")
-        yes_price = m.get("yes_ask") or m.get("yes_bid") or 0
-        no_price = m.get("no_ask") or m.get("no_bid") or 0
-        volume = float(m.get("volume_24h") or m.get("volume") or 0)
-
-        rows.append({
-            "Evento": event_name,
-            "Terminación": f"En {hours:.1f} hrs",
-            "Valor YES": f"{yes_price}¢" if isinstance(yes_price, (int, float)) else str(yes_price),
-            "Valor NO": f"{no_price}¢" if isinstance(no_price, (int, float)) else str(no_price),
-            "_vol": volume
-        })
-
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("_vol", ascending=False).head(10).drop(columns=["_vol"])
-    return df
+    return df_sports, df_fin
 
 # ============================================================
-# INTERFAZ PRINCIPAL
+# INTERFAZ
 # ============================================================
 
 st.title("📊 Kalshi Trending Markets")
-st.caption("Top 10 mercados con vencimiento en las próximas 48 horas (1-2 días)")
+st.caption("Mercados activos con mayor volumen y vencimiento entre 0 y 48 horas")
 
 if st.button("🔄 ACTUALIZAR DATOS", use_container_width=True):
     st.cache_data.clear()
 
-with st.spinner("Cargando mercados actualizados desde Kalshi..."):
+with st.spinner("Cargando mercados desde Kalshi..."):
     raw_data = fetch_raw_markets()
-    df_sports = process_sports_markets(raw_data)
-    df_fin = process_finance_econ_markets(raw_data)
+    df_sports, df_fin = process_markets(raw_data)
 
 # TABLA 1: DEPORTES
-st.header("🏆 Deportes (NFL, NCAA, NBA, MLB)")
+st.header("🏆 Deportes")
 if not df_sports.empty:
     st.dataframe(df_sports, use_container_width=True, hide_index=True)
 else:
-    st.info("No hay eventos de NFL, NCAA, NBA o MLB programados con vencimiento en las próximas 24-48 horas.")
+    st.warning("No hay mercados de deportes con volumen activo venciendo en las próximas 48 horas.")
 
 st.divider()
 
@@ -176,4 +145,4 @@ st.header("📈 Finanzas & Economía")
 if not df_fin.empty:
     st.dataframe(df_fin, use_container_width=True, hide_index=True)
 else:
-    st.info("No hay eventos de Finanzas o Economía con vencimiento en las próximas 24-48 horas.")
+    st.warning("No hay mercados de finanzas/economía con volumen activo venciendo en las próximas 48 horas.")
