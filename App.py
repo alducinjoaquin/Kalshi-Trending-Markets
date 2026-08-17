@@ -294,26 +294,17 @@ if st.button("🔄 ACTUALIZAR DATOS", type="primary", use_container_width=True):
 # CONSULTA
 # ============================================================
 
-with st.spinner("🔎 Consultando mercados de Kalshi..."):
+
+    with st.spinner("🔎 Consultando mercados de Kalshi..."):
 
     try:
         events = get_events()
         df = build_dataframe(events)
 
-try:
-
         st.write("Total eventos:", len(events))
         st.write("Categorías únicas:", sorted(set(str(e.get("category")) for e in events)))
         st.write("Series tickers únicos:", sorted(set(str(e.get("series_ticker")) for e in events))[:50])
 
-
-
-
-
-
-
-
-    
     except requests.exceptions.RequestException as error:
         st.error("❌ Error de conexión con Kalshi.")
         st.code(str(error))
@@ -323,7 +314,6 @@ try:
         st.error("❌ Error procesando los datos.")
         st.code(str(error))
         st.stop()
-
 
 # ============================================================
 # RESULTADO VACÍO
