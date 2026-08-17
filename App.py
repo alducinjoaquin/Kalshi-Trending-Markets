@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
+
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
@@ -20,7 +21,6 @@ MAX_HOURS = 25
 TOP_N = 10
 
 # Series de "ganador del partido" (moneyline) por liga.
-# Todas se etiquetan como "Deportes" para que aparezcan en la sección correcta.
 SPORTS_SERIES = {
     "KXNFLGAME": "Deportes",
     "KXNCAAFGAME": "Deportes",
@@ -28,8 +28,22 @@ SPORTS_SERIES = {
     "KXNBAGAME": "Deportes",
 }
 
-# Categorías (a nivel de serie)
+# Categorías
 ECONOMIA_CATEGORIAS = {"economics", "economy"}
+
+# Keywords prioritarios para Economía (¡esta lista faltaba!)
+ECONOMIA_KEYWORDS = [
+    "cpi", "inflation", "pce", "core",
+    "fed", "fomc", "interest rate", "rate cut", "rate hike",
+    "jobs", "nonfarm", "payroll", "unemployment", "nfp",
+    "gdp", "recession",
+    "retail sales", "consumer",
+    "housing", "home sales",
+    "treasury", "yield",
+    "dollar", "dxy",
+    "oil", "crude",
+    "powell", "jerome",
+]
 
 
 # ============================================================
@@ -138,7 +152,7 @@ def get_all_series():
     return response.json().get("series", [])
 
 
-def get_target_series_tickers():
+_series_tickers():
     """
     Devuelve un dict {series_ticker: categoria_final} solo para:
     - Las 4 ligas de Deportes
