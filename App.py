@@ -136,15 +136,6 @@ def format_pct(value):
 @st.cache_data(ttl=60)
 def get_events():
 
-events = get_events()
-        df = build_dataframe(events)
-
-        st.write("Total eventos:", len(events))
-        st.write("Categorías únicas:", sorted(set(str(e.get("category")) for e in events)))
-        st.write("Series tickers únicos:", sorted(set(str(e.get("series_ticker")) for e in events))[:50])
-
-
-
   
     events = []
     cursor = ""
@@ -309,6 +300,20 @@ with st.spinner("🔎 Consultando mercados de Kalshi..."):
         events = get_events()
         df = build_dataframe(events)
 
+try:
+
+        st.write("Total eventos:", len(events))
+        st.write("Categorías únicas:", sorted(set(str(e.get("category")) for e in events)))
+        st.write("Series tickers únicos:", sorted(set(str(e.get("series_ticker")) for e in events))[:50])
+
+
+
+
+
+
+
+
+    
     except requests.exceptions.RequestException as error:
         st.error("❌ Error de conexión con Kalshi.")
         st.code(str(error))
