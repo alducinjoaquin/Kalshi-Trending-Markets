@@ -8,40 +8,117 @@ from datetime import datetime, timezone
 # ============================================================
 
 st.set_page_config(
-    page_title="Kalshi < 25h",
+    page_title="Kalshi Trending Markets",
     page_icon="📊",
     layout="wide"
 )
 
 API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
 
-LIMIT = 10
 MAX_HOURS = 25
+TOP_N = 10
 
 
 # ============================================================
-# TÍTULO
+# ESTILO VISUAL
 # ============================================================
 
-st.title(
-    f"📊 Kalshi — Top {LIMIT} contratos que vencen en < {MAX_HOURS} horas"
+st.markdown("""
+<style>
+
+.main-title {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 0;
+}
+
+.subtitle {
+    color: #6b7280;
+    font-size: 14px;
+    margin-bottom: 20px;
+}
+
+.metric-card {
+    padding: 15px;
+    border-radius: 12px;
+    background-color: #f5f7fa;
+    text-align: center;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# ENCABEZADO
+# ============================================================
+
+st.markdown(
+    '<div class="main-title">📊 Kalshi Trending Markets</div>',
+    unsafe_allow_html=True
 )
 
-st.caption(
-    "Ordenados por volumen de las últimas 24 horas"
+st.markdown(
+    f'<div class="subtitle">'
+    f'Mercados que vencen en menos de {MAX_HOURS} horas · '
+    f'ordenados por volumen'
+    f'</div>',
+    unsafe_allow_html=True
 )
 
 
 # ============================================================
-# OBTENER MERCADOS
+# FUNCIONES AUXILIARES
 # ============================================================
 
+def to_number(value, default=0.0):
+
+    if value is None:
+        return default
+
+    try:
+
+        if isinstance(value, str):
+
+            value = value.replace(",", "").strip()
+
+            if value == "":
+                return default
+
+        return float(value)
+
+    except Exception:
+
+        return default
+
+
+def parse_datetime(value):
+
+    if not value:
+        return None
+
+    try:
+
+        return datetime.fromisoformat(
+            str(value).replace("Z", "+00:00")
+        )
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# DESCARGAR MERCADOS
+# ============================================================
+
+@st.cache_data(ttl=60)
 def fetch_markets():
 
     markets = []
     cursor = None
 
-    for page in range(20):
+    for _ in range(20):
 
         params = {
             "limit": 1000,
@@ -63,16 +140,16 @@ def fetch_markets():
 
             data = response.json()
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException as error:
 
             raise RuntimeError(
-                f"Error conectando con Kalshi: {e}"
+                f"Error de conexión con Kalshi: {error}"
             )
 
-        except Exception as e:
+        except Exception as error:
 
             raise RuntimeError(
-                f"Error procesando respuesta de Kalshi: {e}"
+                f"Error procesando la respuesta de Kalshi: {error}"
             )
 
         batch = data.get("markets", [])
@@ -91,26 +168,6 @@ def fetch_markets():
 
 
 # ============================================================
-# CONVERTIR FECHA
-# ============================================================
-
-def parse_datetime(value):
-
-    if not value:
-        return None
-
-    try:
-
-        return datetime.fromisoformat(
-            value.replace("Z", "+00:00")
-        )
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
 # PROCESAR MERCADOS
 # ============================================================
 
@@ -120,30 +177,46 @@ def process_markets(markets):
 
     rows = []
 
-    for m in markets:
+    for market in markets:
+
+        # ----------------------------------------------------
+        # STATUS
+        # ----------------------------------------------------
+
+        status = str(
+            market.get("status", "")
+        ).lower()
+
+        if status not in [
+            "open",
+            "active"
+        ]:
+            continue
 
         # ----------------------------------------------------
         # FECHA DE CIERRE
         # ----------------------------------------------------
 
         close_time = (
-            m.get("close_time")
-            or m.get("expiration_time")
-            or m.get("expected_expiration_time")
+            market.get("close_time")
+            or market.get("expiration_time")
+            or market.get("expected_expiration_time")
         )
 
-        close_dt = parse_datetime(close_time)
+        close_dt = parse_datetime(
+            close_time
+        )
 
         if close_dt is None:
             continue
 
+        # ----------------------------------------------------
+        # HORAS RESTANTES
+        # ----------------------------------------------------
+
         hours_left = (
             close_dt - now
         ).total_seconds() / 3600
-
-        # ----------------------------------------------------
-        # FILTRO < 25 HORAS
-        # ----------------------------------------------------
 
         if hours_left <= 0:
             continue
@@ -152,62 +225,88 @@ def process_markets(markets):
             continue
 
         # ----------------------------------------------------
-        # PRECIOS REALES DE KALSHI
-        # ----------------------------------------------------
-
-        yes_bid = m.get("yes_bid_dollars")
-        yes_ask = m.get("yes_ask_dollars")
-
-        no_bid = m.get("no_bid_dollars")
-        no_ask = m.get("no_ask_dollars")
-
-        # ----------------------------------------------------
-        # VOLUMEN
-        # ----------------------------------------------------
-
-        volume_24h = (
-            m.get("volume_24h_fp")
-            or m.get("volume_24h")
-            or 0
-        )
-
-        open_interest = (
-            m.get("open_interest_fp")
-            or m.get("open_interest")
-            or 0
-        )
-
-        # ----------------------------------------------------
-        # NOMBRE
+        # DATOS DE MERCADO
         # ----------------------------------------------------
 
         title = (
-            m.get("title")
-            or m.get("subtitle")
-            or m.get("ticker")
+            market.get("title")
+            or market.get("subtitle")
+            or market.get("ticker")
             or "Sin título"
         )
 
-        ticker = m.get(
+        ticker = market.get(
             "ticker",
             ""
         )
 
         # ----------------------------------------------------
-        # FILA
+        # PRECIOS
+        # ----------------------------------------------------
+
+        yes_bid = to_number(
+            market.get("yes_bid_dollars"),
+            None
+        )
+
+        yes_ask = to_number(
+            market.get("yes_ask_dollars"),
+            None
+        )
+
+        no_bid = to_number(
+            market.get("no_bid_dollars"),
+            None
+        )
+
+        no_ask = to_number(
+            market.get("no_ask_dollars"),
+            None
+        )
+
+        # ----------------------------------------------------
+        # VOLUMEN
+        # ----------------------------------------------------
+
+        volume_raw = (
+            market.get("volume_24h_fp")
+            if market.get("volume_24h_fp") is not None
+            else market.get("volume_24h")
+        )
+
+        volume_24h = to_number(
+            volume_raw,
+            0
+        )
+
+        # ----------------------------------------------------
+        # OPEN INTEREST
+        # ----------------------------------------------------
+
+        oi_raw = (
+            market.get("open_interest_fp")
+            if market.get("open_interest_fp") is not None
+            else market.get("open_interest")
+        )
+
+        open_interest = to_number(
+            oi_raw,
+            0
+        )
+
+        # ----------------------------------------------------
+        # GUARDAR
         # ----------------------------------------------------
 
         rows.append({
 
-            "Mercado": title,
+            "Mercado": str(title),
 
-            "Símbolo": ticker,
+            "Símbolo": str(ticker),
 
-            "Vencimiento": close_dt.strftime(
-                "%d/%m %H:%M"
-            ),
+            "Vencimiento": close_dt,
 
-            "Horas": hours_left,
+            "Horas": float(hours_left),
 
             "YES Bid": yes_bid,
 
@@ -217,9 +316,10 @@ def process_markets(markets):
 
             "NO Ask": no_ask,
 
-            "Vol. 24h": volume_24h,
+            "Volumen 24h": float(volume_24h),
 
-            "Open Interest": open_interest
+            "Open Interest": float(open_interest)
+
         })
 
     return pd.DataFrame(rows)
@@ -241,11 +341,12 @@ if st.button(
 
 
 # ============================================================
-# EJECUCIÓN
+# OBTENER DATOS
 # ============================================================
 
 with st.spinner(
-    f"Buscando mercados que vencen en menos de {MAX_HOURS} horas..."
+    f"Consultando Kalshi y buscando mercados "
+    f"que vencen en menos de {MAX_HOURS} horas..."
 ):
 
     try:
@@ -256,177 +357,268 @@ with st.spinner(
             raw_markets
         )
 
-    except Exception as e:
+    except Exception as error:
 
         st.error(
             "No fue posible obtener los datos de Kalshi."
         )
 
-        st.exception(e)
+        st.exception(error)
 
         st.stop()
 
 
 # ============================================================
-# RESULTADOS
+# SIN RESULTADOS
 # ============================================================
 
 if df.empty:
 
     st.warning(
-        f"Kalshi no devolvió mercados que cumplan "
-        f"el filtro de menos de {MAX_HOURS} horas."
+        f"No encontramos mercados con vencimiento "
+        f"en menos de {MAX_HOURS} horas."
     )
 
     st.info(
-        f"Mercados recibidos desde Kalshi: "
+        f"Mercados descargados desde Kalshi: "
         f"{len(raw_markets)}"
     )
 
-else:
+    st.stop()
 
-    # --------------------------------------------------------
-    # ORDENAR POR VOLUMEN
-    # --------------------------------------------------------
 
-    df = df.sort_values(
-        "Vol. 24h",
-        ascending=False
-    )
+# ============================================================
+# ORDENAR
+# ============================================================
 
-    df = df.head(LIMIT)
+df = df.sort_values(
+    "Volumen 24h",
+    ascending=False
+).head(TOP_N)
 
-    # --------------------------------------------------------
-    # MÉTRICAS
-    # --------------------------------------------------------
 
-    col1, col2, col3 = st.columns(3)
+# ============================================================
+# MÉTRICAS
+# ============================================================
 
-    col1.metric(
-        "Mercados encontrados",
+max_volume = float(
+    df["Volumen 24h"]
+    .fillna(0)
+    .max()
+)
+
+min_hours = float(
+    df["Horas"]
+    .fillna(0)
+    .min()
+)
+
+total_volume = float(
+    df["Volumen 24h"]
+    .fillna(0)
+    .sum()
+)
+
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+
+    st.metric(
+        "Mercados",
         len(df)
     )
 
-    col2.metric(
+with col2:
+
+    st.metric(
         "Mayor volumen 24h",
-        f"{df['Vol. 24h'].max():,.0f}"
+        f"{max_volume:,.0f}"
     )
 
-    col3.metric(
-        "Vencimiento más próximo",
-        f"{df['Horas'].min():.1f} h"
+with col3:
+
+    st.metric(
+        "Próximo vencimiento",
+        f"{min_hours:.1f} h"
     )
 
-    st.divider()
 
-    # --------------------------------------------------------
-    # FORMATO
-    # --------------------------------------------------------
+st.divider()
 
-    display = df.copy()
 
-    for col in [
-        "YES Bid",
-        "YES Ask",
-        "NO Bid",
-        "NO Ask"
-    ]:
+# ============================================================
+# PREPARAR TABLA
+# ============================================================
 
-        display[col] = display[col].apply(
-            lambda x:
-            f"{float(x):.2f}"
-            if pd.notna(x)
-            else "—"
+display = df.copy()
+
+display.insert(
+    0,
+    "#",
+    range(
+        1,
+        len(display) + 1
+    )
+)
+
+
+# ------------------------------------------------------------
+# FORMATO DE PRECIOS
+# ------------------------------------------------------------
+
+def format_price(value):
+
+    if pd.isna(value):
+
+        return "—"
+
+    try:
+
+        return f"{float(value):.2f}"
+
+    except:
+
+        return "—"
+
+
+for column in [
+    "YES Bid",
+    "YES Ask",
+    "NO Bid",
+    "NO Ask"
+]:
+
+    display[column] = display[
+        column
+    ].apply(format_price)
+
+
+# ------------------------------------------------------------
+# FORMATO VOLUMEN
+# ------------------------------------------------------------
+
+display["Volumen 24h"] = display[
+    "Volumen 24h"
+].apply(
+    lambda x:
+    f"{float(x):,.0f}"
+)
+
+
+display["Open Interest"] = display[
+    "Open Interest"
+].apply(
+    lambda x:
+    f"{float(x):,.0f}"
+)
+
+
+# ------------------------------------------------------------
+# FORMATO HORAS
+# ------------------------------------------------------------
+
+display["Horas"] = display[
+    "Horas"
+].apply(
+    lambda x:
+    f"{float(x):.1f} h"
+)
+
+
+# ------------------------------------------------------------
+# FORMATO FECHA
+# ------------------------------------------------------------
+
+display["Vencimiento"] = display[
+    "Vencimiento"
+].apply(
+    lambda x:
+    x.strftime("%d/%m %H:%M")
+    if pd.notna(x)
+    else "—"
+)
+
+
+# ============================================================
+# TABLA
+# ============================================================
+
+st.subheader(
+    "🔥 Top mercados por volumen"
+)
+
+st.dataframe(
+    display,
+    use_container_width=True,
+    hide_index=True,
+
+    column_config={
+
+        "#": st.column_config.NumberColumn(
+            "#",
+            width="small"
+        ),
+
+        "Mercado": st.column_config.TextColumn(
+            "Mercado",
+            width="large"
+        ),
+
+        "Símbolo": st.column_config.TextColumn(
+            "Símbolo",
+            width="medium"
+        ),
+
+        "Vencimiento": st.column_config.TextColumn(
+            "Vencimiento",
+            width="medium"
+        ),
+
+        "Horas": st.column_config.TextColumn(
+            "Tiempo",
+            width="small"
+        ),
+
+        "YES Bid": st.column_config.TextColumn(
+            "YES Bid",
+            width="small"
+        ),
+
+        "YES Ask": st.column_config.TextColumn(
+            "YES Ask",
+            width="small"
+        ),
+
+        "NO Bid": st.column_config.TextColumn(
+            "NO Bid",
+            width="small"
+        ),
+
+        "NO Ask": st.column_config.TextColumn(
+            "NO Ask",
+            width="small"
+        ),
+
+        "Volumen 24h": st.column_config.TextColumn(
+            "Vol. 24h",
+            width="medium"
+        ),
+
+        "Open Interest": st.column_config.TextColumn(
+            "Open Interest",
+            width="medium"
         )
+    }
+)
 
-    display["Vol. 24h"] = display[
-        "Vol. 24h"
-    ].apply(
-        lambda x:
-        f"{float(x):,.0f}"
-    )
 
-    display["Open Interest"] = display[
-        "Open Interest"
-    ].apply(
-        lambda x:
-        f"{float(x):,.0f}"
-    )
+# ============================================================
+# INFORMACIÓN
+# ============================================================
 
-    display["Horas"] = display[
-        "Horas"
-    ].apply(
-        lambda x:
-        f"{x:.1f} h"
-    )
-
-    display.insert(
-        0,
-        "#",
-        range(
-            1,
-            len(display) + 1
-        )
-    )
-
-    # --------------------------------------------------------
-    # TABLA
-    # --------------------------------------------------------
-
-    st.dataframe(
-        display,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-
-            "Mercado": st.column_config.TextColumn(
-                "Mercado",
-                width="large"
-            ),
-
-            "Símbolo": st.column_config.TextColumn(
-                "Símbolo",
-                width="medium"
-            ),
-
-            "YES Bid": st.column_config.TextColumn(
-                "YES Bid",
-                width="small"
-            ),
-
-            "YES Ask": st.column_config.TextColumn(
-                "YES Ask",
-                width="small"
-            ),
-
-            "NO Bid": st.column_config.TextColumn(
-                "NO Bid",
-                width="small"
-            ),
-
-            "NO Ask": st.column_config.TextColumn(
-                "NO Ask",
-                width="small"
-            ),
-
-            "Vol. 24h": st.column_config.TextColumn(
-                "Vol. 24h",
-                width="medium"
-            ),
-
-            "Open Interest": st.column_config.TextColumn(
-                "Open Interest",
-                width="medium"
-            ),
-
-            "Horas": st.column_config.TextColumn(
-                "Vence",
-                width="small"
-            )
-        }
-    )
-
-    st.caption(
-        f"Actualizado: "
-        f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
-    )
+st.caption(
+    f"Última actualización: "
+    f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')} · "
+    f"Se analizaron {len(raw_markets):,} mercados recibidos de Kalshi."
+)
