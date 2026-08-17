@@ -4,127 +4,167 @@ import pandas as pd
 from datetime import datetime, timezone
 
 # ============================================================
-# CONFIGURACIÓN DE PÁGINA
+# CONFIGURACIÓN
 # ============================================================
 st.set_page_config(
-    page_title="Kalshi Trending Markets",
+    page_title="Kalshi - Vence < 25h",
     page_icon="📊",
     layout="wide"
 )
 
 API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
+MAX_HOURS = 25
+LIMIT_CONTRACTS = 10
+
+st.title("📊 Kalshi - 10 Contratos que vencen en < 25 horas")
+st.caption("Tabla con tu diseño: Mercado | Símbolo | Vencimiento | YES | NO")
 
 # ============================================================
-# OBTENER DATOS DE LA API
+# API
 # ============================================================
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=120)
 def fetch_all_open_markets():
     markets = []
     cursor = ""
-    
-    # Obtenemos hasta 3,000 mercados abiertos para asegurar inventario
-    for _ in range(15):
+    headers = {"Accept": "application/json"}
+
+    for _ in range(20): # hasta 4000 mercados para asegurar que encontramos 10
         params = {"limit": 200, "status": "open"}
         if cursor:
             params["cursor"] = cursor
-
         try:
-            res = requests.get(API_URL, params=params, timeout=10)
-            if res.status_code != 200:
-                break
+            res = requests.get(API_URL, params=params, headers=headers, timeout=15)
+            res.raise_for_status()
             data = res.json()
             fetched = data.get("markets", [])
-            markets.extend(fetched)
-            
-            cursor = data.get("cursor")
-            if not cursor or not fetched:
+            if not fetched:
                 break
-        except Exception:
+            markets.extend(fetched)
+            cursor = data.get("cursor")
+            if not cursor:
+                break
+            # Early exit si ya tenemos suficientes candidatos
+            if len(markets) > 2000:
+                # seguimos filtrando después, pero evitamos pedir de más
+                pass
+        except Exception as e:
+            st.error(f"Error API Kalshi: {e}")
             break
-
     return markets
 
-# ============================================================
-# CÁLCULO DE VENCIMIENTO
-# ============================================================
-def process_market_row(m, min_hours, max_hours):
-    # Obtención de fecha de expiración/cierre
-    raw_time = m.get("close_time") or m.get("expiration_time") or m.get("expected_expiration_time")
+def get_hours_to_expire(market):
+    raw_time = market.get("close_time") or market.get("expiration_time") or market.get("expected_expiration_time")
     if not raw_time:
-        return None
-
+        return None, None
     try:
         dt = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         hours_diff = (dt - now).total_seconds() / 3600.0
-        
-        # Filtrado por ventana de horas
-        if hours_diff < min_hours or hours_diff > max_hours:
-            return None
-
-        # Formato de fecha legible
-        formatted_date = dt.strftime("%b %d @ %I:%M%p").replace(" 0", " ")
+        return hours_diff, dt
     except Exception:
-        return None
+        return None, None
 
-    # Extracción de Nombres y Títulos sin contaminación
-    title = m.get("title") or "Sin título"
-    
-    # Limpieza del Símbolo / Nombre principal
-    symbol = m.get("event_ticker") or m.get("series_ticker") or m.get("ticker") or "KALSHI"
-    symbol_clean = str(symbol).replace("_", " ").upper()
-
-    # Precios YES / NO
-    yes_price = m.get("last_price") or m.get("yes_bid") or m.get("yes_ask") or 0
-    try:
-        yes_val = int(yes_price)
-    except (ValueError, TypeError):
-        yes_val = 0
-
-    yes_val = max(1, min(99, yes_val)) if yes_val > 0 else 50
-    no_val = 100 - yes_val
-
-    return {
-        "Mercado / Descripción breve": title,
-        "Símbolo / Nombre": symbol_clean,
-        "Fecha de vencimiento": formatted_date,
-        "YES (valor)": f"{yes_val}%",
-        "NO (valor)": f"{no_val}%",
-        "_hours": hours_diff
-    }
+def get_yes_price(market):
+    # Kalshi devuelve precios en centavos 0-100
+    for key in ["yes_bid", "yes_ask", "last_price", "yes_price"]:
+        val = market.get(key)
+        if val is not None:
+            try:
+                # Algunos vienen como dict o string
+                if isinstance(val, dict):
+                    val = val.get("dollars") or val.get("cents") or 0
+                iv = int(float(val))
+                if 1 <= iv <= 100:
+                    return iv
+            except:
+                continue
+    return None
 
 # ============================================================
-# INTERFAZ Y FILTROS
+# PROCESAMIENTO
 # ============================================================
-st.title("📊 Kalshi Trending Markets")
-
-# Barra lateral para ajustar ventana de horas en tiempo real
-st.sidebar.header("Filtros de Expiración")
-min_h, max_h = st.sidebar.slider(
-    "Selecciona la ventana de vencimiento (Horas):",
-    min_value=0,
-    max_value=120,
-    value=(0, 72),
-    step=6
-)
-
-if st.button("🔄 ACTUALIZAR DATOS", use_container_width=True):
-    st.cache_data.clear()
-
-with st.spinner("Conectando con Kalshi y extrayendo mercados..."):
+def build_table():
     raw_markets = fetch_all_open_markets()
-    
-    processed_rows = []
-    for m in raw_markets:
-        row = process_market_row(m, min_h, max_h)
-        if row:
-            processed_rows.append(row)
+    rows = []
 
-    if processed_rows:
-        df = pd.DataFrame(processed_rows)
-        df = df.sort_values("_hours").drop(columns=["_hours"])
-        
-        st.caption(f"Mostrando {len(df)} mercados que vencen entre las próximas {min_h} y {max_h} horas.")
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.warning(f"No se encontraron mercados con vencimiento entre {min_h} y {max_h} horas. Prueba amplificando el rango en la barra lateral.")
+    for m in raw_markets:
+        hours, dt = get_hours_to_expire(m)
+        if hours is None:
+            continue
+        if hours <= 0 or hours > MAX_HOURS: # FILTRO < 25 HORAS
+            continue
+
+        yes_val = get_yes_price(m)
+        if yes_val is None:
+            continue
+
+        yes_val = max(1, min(99, yes_val))
+        no_val = 100 - yes_val
+
+        title = (m.get("title") or m.get("subtitle") or "Sin título").strip()
+        # Descripción breve como en tu foto
+        if len(title) > 80:
+            title = title[:77] + "..."
+
+        symbol = m.get("event_ticker") or m.get("series_ticker") or m.get("ticker") or "KALSHI"
+        symbol_clean = str(symbol).replace("_", " ").upper()
+
+        formatted_date = dt.astimezone(timezone.utc).strftime("%b %d @ %I:%M%p %Z")
+
+        rows.append({
+            "Mercado / Descripción breve": title,
+            "Símbolo / Nombre": symbol_clean,
+            "Fecha de vencimiento": formatted_date,
+            "YES (valor)": yes_val,
+            "NO (valor)": no_val,
+            "_hours": hours,
+            "_dt": dt,
+            "_vol": m.get("volume", 0)
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values(by="_hours", ascending=True).head(LIMIT_CONTRACTS)
+    return df
+
+# ============================================================
+# UI
+# ============================================================
+col1, col2 = st.columns([1, 4])
+with col1:
+    if st.button("🔄 ACTUALIZAR", use_container_width=True, type="primary"):
+        st.cache_data.clear()
+        st.rerun()
+with col2:
+    st.info(f"Mostrando exactamente {LIMIT_CONTRACTS} contratos con vencimiento < {MAX_HOURS}h, ordenados del más próximo a vencer.")
+
+with st.spinner("Buscando mercados que vencen en < 25h..."):
+    df_raw = build_table()
+
+if df_raw.empty:
+    st.warning(f"No se encontraron {LIMIT_CONTRACTS} mercados que venzan en < {MAX_HOURS}h. La API puede estar lenta. Dale a ACTUALIZAR.")
+else:
+    # Tabla final con tu diseño exacto
+    df_display = df_raw[["Mercado / Descripción breve", "Símbolo / Nombre", "Fecha de vencimiento", "YES (valor)", "NO (valor)"]].copy()
+
+    # Formateo visual para que se vea como tu foto
+    df_display["YES (valor)"] = df_display["YES (valor)"].apply(lambda x: f"{x}%")
+    df_display["NO (valor)"] = df_display["NO (valor)"].apply(lambda x: f"{x}%")
+
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Mercado / Descripción breve": st.column_config.TextColumn(width="large"),
+            "Símbolo / Nombre": st.column_config.TextColumn(width="medium"),
+            "Fecha de vencimiento": st.column_config.TextColumn(width="medium"),
+            "YES (valor)": st.column_config.TextColumn("YES", width="small"),
+            "NO (valor)": st.column_config.TextColumn("NO", width="small"),
+        }
+    )
+
+    # Métrica extra útil
+    st.caption(f"Vencimiento más cercano: {df_raw.iloc[0]['_hours']:.1f}h | Más lejano de los 10: {df_raw.iloc[-1]['_hours']:.1f}h | Vol total: ${int(df_raw['_vol'].sum()):,}")
