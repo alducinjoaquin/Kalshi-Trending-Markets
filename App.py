@@ -18,7 +18,7 @@ BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 MAX_HOURS = 25
 TOP_N = 10
 
-# Series ticker de "ganador del partido" (moneyline) por liga.
+# Series de "ganador del partido" (moneyline) por liga.
 # Confirmado contra la documentación pública de Kalshi.
 SPORTS_SERIES = {
     "KXNFLGAME": "NFL",
@@ -26,6 +26,11 @@ SPORTS_SERIES = {
     "KXMLBGAME": "MLB",
     "KXNBAGAME": "NBA",
 }
+
+# Categorías (a nivel de serie, que es la fuente de verdad actual;
+# el campo "category" a nivel de evento está deprecado en la API).
+FINANZAS_CATEGORIAS = {"financials", "finance", "financial"}
+ECONOMIA_CATEGORIAS = {"economics", "economy"}
 
 
 # ============================================================
@@ -130,36 +135,72 @@ def format_pct(value):
 
 
 # ============================================================
-# OBTENER EVENTOS (paginado, todas las categorías abiertas)
+# PASO 1 — DESCUBRIR QUÉ SERIES PERTENECEN A CADA CATEGORÍA
+# ============================================================
+
+@st.cache_data(ttl=300)
+def get_all_series():
+    """Trae el catálogo completo de series (son cientos, no miles)."""
+
+    response = requests.get(f"{BASE_URL}/series", timeout=30)
+    response.raise_for_status()
+
+    return response.json().get("series", [])
+
+
+def get_target_series_tickers():
+    """
+    Devuelve un dict {series_ticker: categoria_final} solo para las
+    series que nos interesan: Finanzas, Economía y las 4 ligas de
+    Deportes. Evita tener que escanear todos los eventos abiertos.
+    """
+
+    targets = dict(SPORTS_SERIES)  # arranca con las 4 ligas
+
+    for series in get_all_series():
+
+        ticker = series.get("ticker", "")
+        category = str(series.get("category", "")).strip().lower()
+
+        if ticker in targets:
+            continue  # ya está cubierto como serie deportiva
+
+        if category in FINANZAS_CATEGORIAS:
+            targets[ticker] = "Finanzas"
+
+        elif category in ECONOMIA_CATEGORIAS:
+            targets[ticker] = "Economía"
+
+    return targets
+
+
+# ============================================================
+# PASO 2 — TRAER EVENTOS SOLO DE ESAS SERIES ESPECÍFICAS
 # ============================================================
 
 @st.cache_data(ttl=60)
-def get_events():
+def get_events_for_series(series_ticker):
+    """Trae eventos abiertos de UNA serie puntual (paginado por si acaso)."""
 
     events = []
     cursor = ""
 
-    for _ in range(30):
+    for _ in range(10):
 
         params = {
-            "limit": 200,
-            "with_nested_markets": "true",
+            "series_ticker": series_ticker,
             "status": "open",
+            "with_nested_markets": "true",
+            "limit": 200,
         }
 
         if cursor:
             params["cursor"] = cursor
 
-        response = requests.get(
-            f"{BASE_URL}/events",
-            params=params,
-            timeout=30
-        )
-
+        response = requests.get(f"{BASE_URL}/events", params=params, timeout=30)
         response.raise_for_status()
 
         data = response.json()
-
         batch = data.get("events", [])
 
         if not batch:
@@ -176,108 +217,74 @@ def get_events():
 
 
 # ============================================================
-# PROCESAR EVENTOS
+# PROCESAR EVENTOS → FILAS DE TABLA
 # ============================================================
 
-def build_dataframe(events):
+def build_dataframe(targets):
 
     now = datetime.now(timezone.utc)
     max_close = now + timedelta(hours=MAX_HOURS)
 
     rows = []
+    total_events_fetched = 0
 
-    for event in events:
+    for series_ticker, category_final in targets.items():
 
-        # ----------------------------------------------------
-        # CLASIFICAR CATEGORÍA
-        # ----------------------------------------------------
+        events = get_events_for_series(series_ticker)
+        total_events_fetched += len(events)
 
-        series_ticker = str(event.get("series_ticker", "")).strip()
-        category = str(event.get("category", "")).strip().lower()
+        for event in events:
 
-        if series_ticker in SPORTS_SERIES:
-            category_final = "Deportes"
-
-        elif category in ["financials", "finance", "financial"]:
-            category_final = "Finanzas"
-
-        elif category in ["economics", "economy"]:
-            category_final = "Economía"
-
-        else:
-            continue
-
-        event_title = (
-            event.get("title")
-            or event.get("sub_title")
-            or event.get("event_ticker")
-            or "Sin título"
-        )
-
-        markets = event.get("markets", [])
-
-        for market in markets:
-
-            # ------------------------------------------------
-            # STATUS DEL MERCADO
-            # ------------------------------------------------
-
-            status = str(market.get("status", "")).lower()
-
-            if status != "open":
-                continue
-
-            # ------------------------------------------------
-            # FECHA DE CIERRE / VENTANA 0-25H
-            # ------------------------------------------------
-
-            close_dt = parse_time(market.get("close_time"))
-
-            if close_dt is None:
-                continue
-
-            if close_dt <= now or close_dt > max_close:
-                continue
-
-            # ------------------------------------------------
-            # TÍTULO DEL MERCADO
-            # ------------------------------------------------
-
-            market_title = (
-                market.get("title")
-                or market.get("yes_sub_title")
-                or market.get("subtitle")
-                or event_title
+            event_title = (
+                event.get("title")
+                or event.get("sub_title")
+                or event.get("event_ticker")
+                or "Sin título"
             )
 
-            market_title = str(market_title).strip()
+            markets = event.get("markets", [])
 
-            if not market_title:
-                market_title = event_title
+            for market in markets:
 
-            # ------------------------------------------------
-            # PRECIOS (dólares, 0.0-1.0) Y VOLUMEN / INTERÉS
-            # ------------------------------------------------
+                status = str(market.get("status", "")).lower()
 
-            yes_bid = get_number(market.get("yes_bid_dollars"))
-            no_bid = get_number(market.get("no_bid_dollars"))
+                if status != "open":
+                    continue
 
-            volume = get_number(market.get("volume_24h_fp"))
-            open_interest = get_number(market.get("open_interest_fp"))
+                close_dt = parse_time(market.get("close_time"))
 
-            rows.append({
-                "Categoría": category_final,
-                "Liga": SPORTS_SERIES.get(series_ticker, ""),
-                "Mercado": market_title,
-                "Vencimiento": close_dt,
-                "YES Bid": yes_bid,
-                "NO Bid": no_bid,
-                "Volumen": volume,
-                "Interés Abierto": open_interest,
-                "Ticker": market.get("ticker", ""),
-            })
+                if close_dt is None:
+                    continue
 
-    return pd.DataFrame(rows)
+                if close_dt <= now or close_dt > max_close:
+                    continue
+
+                market_title = (
+                    market.get("yes_sub_title")
+                    or market.get("title")
+                    or market.get("subtitle")
+                    or event_title
+                )
+
+                market_title = str(market_title).strip() or event_title
+
+                yes_bid = get_number(market.get("yes_bid_dollars"))
+                no_bid = get_number(market.get("no_bid_dollars"))
+                volume = get_number(market.get("volume_24h_fp"))
+                open_interest = get_number(market.get("open_interest_fp"))
+
+                rows.append({
+                    "Categoría": category_final,
+                    "Mercado": market_title,
+                    "Vencimiento": close_dt,
+                    "YES Bid": yes_bid,
+                    "NO Bid": no_bid,
+                    "Volumen": volume,
+                    "Interés Abierto": open_interest,
+                    "Ticker": market.get("ticker", ""),
+                })
+
+    return pd.DataFrame(rows), total_events_fetched
 
 
 # ============================================================
@@ -296,12 +303,8 @@ if st.button("🔄 ACTUALIZAR DATOS", type="primary", use_container_width=True):
 with st.spinner("🔎 Consultando mercados de Kalshi..."):
 
     try:
-        events = get_events()
-        df = build_dataframe(events)
-
-        st.write("Total eventos:", len(events))
-        st.write("Categorías únicas:", sorted(set(str(e.get("category")) for e in events)))
-        st.write("Series tickers únicos:", sorted(set(str(e.get("series_ticker")) for e in events))[:50])
+        targets = get_target_series_tickers()
+        df, total_events_fetched = build_dataframe(targets)
 
     except requests.exceptions.RequestException as error:
         st.error("❌ Error de conexión con Kalshi.")
@@ -326,7 +329,10 @@ if df.empty:
         f"menos de {MAX_HOURS} horas."
     )
 
-    st.info(f"Eventos recibidos desde Kalshi: {len(events):,}")
+    st.info(
+        f"Series consultadas: {len(targets)} · "
+        f"Eventos revisados en esas series: {total_events_fetched:,}"
+    )
 
     st.stop()
 
@@ -338,10 +344,6 @@ if df.empty:
 def show_category(dataframe, category, icon):
 
     data = dataframe[dataframe["Categoría"] == category].copy()
-
-    # --------------------------------------------------------
-    # ORDEN: PRIORIDAD A INTERÉS ABIERTO, DESEMPATE POR VOLUMEN
-    # --------------------------------------------------------
 
     data = data.sort_values(
         ["Interés Abierto", "Volumen"],
