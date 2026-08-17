@@ -78,20 +78,21 @@ st.markdown("""
 # ENCABEZADO
 # ============================================================
 
+
 st.markdown(
     '<div class="main-title">📊 Kalshi Trending Markets</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
-    f'<div class="subtitle">'
-    f'Top {TOP_N} mercados · vencimiento en menos de '
-    f'{MAX_HOURS} horas · ordenados por interés abierto '
-    f'(desempate por volumen 24h)'
-    f'</div>',
+    f'''
+    <div class="subtitle">
+        Top {TOP_N} mercados · vencimiento en menos de {MAX_HOURS} horas<br>
+        Ordenados por interés abierto (desempate por volumen 24h)
+    </div>
+    ''',
     unsafe_allow_html=True
 )
-
 
 # ============================================================
 # FUNCIONES AUXILIARES
@@ -139,27 +140,35 @@ def get_all_series():
 
 def get_target_series_tickers():
     """
-    Devuelve un dict {series_ticker: categoria_final} solo para las
-    series que nos interesan: Economía y las 4 ligas de Deportes.
+    Devuelve un dict {series_ticker: categoria_final} solo para:
+    - Las 4 ligas de Deportes
+    - Series de Economía relevantes (filtradas por keywords)
     """
-    targets = dict(SPORTS_SERIES)  # arranca con las 4 ligas como "Deportes"
+    targets = dict(SPORTS_SERIES)  # las 4 ligas como "Deportes"
+
+    economia_count = 0
+    MAX_ECONOMIA = 45          # límite duro para no saturar
 
     for series in get_all_series():
+        if economia_count >= MAX_ECONOMIA:
+            break
+
         ticker = series.get("ticker", "")
-        category = str(series.get("category", "")).strip().lower()
-
         if ticker in targets:
-            continue  # ya está cubierto como serie deportiva
+            continue
 
-        if category in ECONOMIA_CATEGORIAS:
+        category = str(series.get("category", "")).strip().lower()
+        title = str(series.get("title", "")).lower()
+
+        if category not in ECONOMIA_CATEGORIAS:
+            continue
+
+        # Solo series cuyo título contenga al menos una keyword relevante
+        if any(kw in title for kw in ECONOMIA_KEYWORDS):
             targets[ticker] = "Economía"
+            economia_count += 1
 
     return targets
-
-
-# ============================================================
-# ÍNDICES — descubrimiento por TÍTULO de serie
-# ============================================================
 
 # ============================================================
 # ÍNDICES — descubrimiento por TÍTULO de serie
