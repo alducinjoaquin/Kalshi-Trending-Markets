@@ -367,7 +367,13 @@ def build_dataframe(targets):
                     "Ticker": market.get("ticker", ""),
                 })
 
-    return pd.DataFrame(rows), total_events_fetched
+    columns = [
+        "Categoría", "EventTicker", "EventTitle", "Resultado",
+        "Vencimiento", "YES Bid", "NO Bid", "Volumen",
+        "Interés Abierto", "Ticker",
+    ]
+
+    return pd.DataFrame(rows, columns=columns), total_events_fetched
 
 
 def build_indices_dataframe():
@@ -444,7 +450,12 @@ def build_indices_dataframe():
                     "Interés Abierto": get_number(market.get("open_interest_fp")),
                 })
 
-    return pd.DataFrame(rows)
+    columns = [
+        "Grupo", "Índice", "EventTicker", "EventTitle", "Resultado",
+        "Vencimiento", "YES Bid", "NO Bid", "Volumen", "Interés Abierto",
+    ]
+
+    return pd.DataFrame(rows, columns=columns)
 
 
 # ============================================================
@@ -466,12 +477,7 @@ with st.spinner("🔎 Consultando mercados de Kalshi..."):
         targets = get_target_series_tickers()
         st.caption(f"Consultando {len(targets)} series en paralelo (máx. 45s)...")
         df, total_events_fetched = build_dataframe(targets)
-
-        index_series_debug = discover_index_series()
-        st.write("DEBUG — series de índices encontradas por título:", index_series_debug)
-
         indices_df = build_indices_dataframe()
-        st.write("DEBUG — filas de índices tras filtrar hoy/mañana:", len(indices_df))
 
     except requests.exceptions.RequestException as error:
         st.error("❌ Error de conexión con Kalshi.")
