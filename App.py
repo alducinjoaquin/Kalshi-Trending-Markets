@@ -322,7 +322,9 @@ def build_dataframe(targets):
 
                 rows.append({
                     "Categoría": category_final,
-                    "Mercado": market_title,
+                    "EventTicker": event.get("event_ticker", ""),
+                    "EventTitle": event_title,
+                    "Resultado": market_title,
                     "Vencimiento": close_dt,
                     "YES Bid": yes_bid,
                     "NO Bid": no_bid,
@@ -393,38 +395,91 @@ def show_category(dataframe, category, icon):
 
     data = dataframe[dataframe["Categoría"] == category].copy()
 
-    data = data.sort_values(
-        ["Interés Abierto", "Volumen"],
-        ascending=[False, False]
-    ).head(TOP_N)
-
     st.markdown(
         f'<div class="section">{icon} {category}</div>',
         unsafe_allow_html=True
     )
 
+    if data.empty:
+        st.markdown(
+            f'<div class="section-note">'
+            f'Top 0 · ordenados por interés abierto '
+            f'(desempate por volumen 24h)'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+        st.info("No hay mercados disponibles en esta categoría.")
+        return
+
+    # --------------------------------------------------------
+    # AGRUPAR POR EVENTO: un evento (ej. "EUR/USD range 2pm")
+    # puede tener 10-30 resultados/rangos posibles como mercados
+    # individuales. Queremos UNA fila por evento, no una por rango.
+    # --------------------------------------------------------
+
+    event_rank = (
+        data.groupby("EventTicker")
+        .agg(
+            InteresEvento=("Interés Abierto", "sum"),
+            VolumenEvento=("Volumen", "sum"),
+        )
+        .reset_index()
+        .sort_values(
+            ["InteresEvento", "VolumenEvento"],
+            ascending=[False, False]
+        )
+        .head(TOP_N)
+    )
+
+    rows_out = []
+
+    for _, event_row in event_rank.iterrows():
+
+        event_ticker = event_row["EventTicker"]
+        subset = data[data["EventTicker"] == event_ticker]
+
+        # El resultado representativo del evento es el que tiene
+        # más interés abierto (el más "cotizado" de ese evento).
+        representative = subset.sort_values(
+            ["Interés Abierto", "Volumen"],
+            ascending=[False, False]
+        ).iloc[0]
+
+        event_title = representative["EventTitle"]
+        resultado = representative["Resultado"]
+
+        # Evita repetir el mismo texto dos veces cuando el
+        # resultado individual ya es igual al título del evento
+        # (mercados binarios simples, sin rangos).
+        if resultado.strip() and resultado.strip() != event_title.strip():
+            nombre_mostrado = f"{event_title} — {resultado}"
+        else:
+            nombre_mostrado = event_title
+
+        rows_out.append({
+            "Mercado / Evento": nombre_mostrado,
+            "Vencimiento": representative["Vencimiento"],
+            "YES Bid": representative["YES Bid"],
+            "NO Bid": representative["NO Bid"],
+        })
+
     st.markdown(
         f'<div class="section-note">'
-        f'Top {len(data)} · ordenados por interés abierto '
-        f'(desempate por volumen 24h)'
+        f'Top {len(rows_out)} eventos · ordenados por interés abierto '
+        f'(desempate por volumen 24h) · el resultado mostrado es el '
+        f'de mayor interés abierto dentro de cada evento'
         f'</div>',
         unsafe_allow_html=True
     )
 
-    if data.empty:
-        st.info("No hay mercados disponibles en esta categoría.")
-        return
+    table = pd.DataFrame(rows_out)
 
-    table = pd.DataFrame()
-
-    table["Mercado / Evento"] = data["Mercado"]
-
-    table["Vencimiento"] = data["Vencimiento"].apply(
+    table["Vencimiento"] = table["Vencimiento"].apply(
         lambda x: x.strftime("%d %b · %H:%M")
     )
 
-    table["YES Bid"] = data["YES Bid"].apply(format_pct)
-    table["NO Bid"] = data["NO Bid"].apply(format_pct)
+    table["YES Bid"] = table["YES Bid"].apply(format_pct)
+    table["NO Bid"] = table["NO Bid"].apply(format_pct)
 
     st.dataframe(
         table,
